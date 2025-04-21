@@ -3,19 +3,38 @@ import React, { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
 const Update = () => {
-
-    const { id } = useParams(); // useParams is a hook that returns an object of key/value pairs of URL parameters. Use it to access match.params of the current <Route>.
-    const [values, setValues] = useState({ name: '', email: '', password: '' }); // useState is a hook that returns an array containing two elements: the current state and a function to update it.
+    const { id } = useParams();
+    const [values, setValues] = useState({ 
+        name: '', 
+        email: '', 
+        password: '' 
+    });
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
     const navigate = useNavigate();
 
     useEffect(() => {
         axios.get(`http://localhost:5000/read/${id}`)
             .then(response => {
                 console.log(response);
-                setValues({ ...values, name: response.data[0].name, email: response.data[0].email, password: response.data[0].password })
+                if (response.data && response.data[0]) {
+                    const userData = response.data[0];
+                    setValues({ 
+                        name: userData.name, 
+                        email: userData.email, 
+                        password: userData.password 
+                    });
+                } else {
+                    setError('User data not found');
+                }
+                setLoading(false);
             })
-            .catch(error => console.log(error))
-    }, [])
+            .catch(error => {
+                console.log(error);
+                setError('Error loading user data');
+                setLoading(false);
+            });
+    }, [id]);
 
     const handleUpdate = (event) => {
         event.preventDefault();
@@ -24,33 +43,61 @@ const Update = () => {
                 console.log(response);
                 navigate('/');
             })
-            .catch(error => console.log(error));
+            .catch(error => {
+                console.log(error);
+                setError('Error updating user');
+            });
     }
 
+    if (loading) {
+        return <div className="d-flex justify-content-center">
+            <div className="spinner-border" role="status">
+                <span className="visually-hidden">Loading...</span>
+            </div>
+        </div>;
+    }
 
     return (
         <div className='d-flex flex-column vh-100 bg-light justify-content-center align-items-center'>
-            <h4>Update Data</h4>
+            <h4>Update User</h4>
+            {error && <div className="alert alert-danger">{error}</div>}
             <div className="w-50 mt-2 bg-white rounded p-3">
                 <form onSubmit={handleUpdate}>
-
                     <div className="mb-3">
                         <label htmlFor="name" className="form-label">Name</label>
-                        <input type="text" className="form-control" id="name" value={values.name} onChange={e => setValues({ ...values, name: e.target.value })} />
+                        <input 
+                            type="text" 
+                            className="form-control" 
+                            id="name" 
+                            value={values.name} 
+                            onChange={e => setValues({ ...values, name: e.target.value })} 
+                        />
                     </div>
 
                     <div className="mb-3">
                         <label htmlFor="email" className="form-label">Email</label>
-                        <input type="email" className="form-control" id="email" value={values.email} onChange={e => setValues({ ...values, email: e.target.value })} />
+                        <input 
+                            type="email" 
+                            className="form-control" 
+                            id="email" 
+                            value={values.email} 
+                            onChange={e => setValues({ ...values, email: e.target.value })} 
+                        />
                     </div>
 
                     <div className="mb-3">
                         <label htmlFor="password" className="form-label">Password</label>
-                        <input type="text" className="form-control" id="password" value={values.password} onChange={e => setValues({ ...values, password: e.target.value })} />
+                        <input 
+                            type="text" 
+                            className="form-control" 
+                            id="password" 
+                            value={values.password} 
+                            onChange={e => setValues({ ...values, password: e.target.value })} 
+                        />
                     </div>
 
                     <button type="submit" className="btn btn-dark">Update</button>
-
+                    <Link to={`/read/${id}`} className="btn btn-outline-dark ms-1">Cancel</Link>
                 </form>
             </div>
         </div>

@@ -1,54 +1,122 @@
 import axios from 'axios';
-import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom';
+import React, { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 
 const Create = () => {
+  const [values, setValues] = useState({ 
+    name: '', 
+    email: '', 
+    password: '' 
+  });
+  const [errors, setErrors] = useState({});
+  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
 
-  const [values, setValues] = useState({ name: '', email: '', password: '' }); // useState is a hook that returns an array containing two elements: the current state and a function to update it.
-  const navigate = useNavigate(); // for redirecting
+  const validate = () => {
+    const newErrors = {};
+    
+    if (!values.name.trim()) {
+      newErrors.name = "Name is required";
+    }
+    
+    if (!values.email.trim()) {
+      newErrors.email = "Email is required";
+    } else if (!/\S+@\S+\.\S+/.test(values.email)) {
+      newErrors.email = "Email is invalid";
+    }
+    
+    if (!values.password) {
+      newErrors.password = "Password is required";
+    } else if (values.password.length < 6) {
+      newErrors.password = "Password must be at least 6 characters";
+    }
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
 
-  const haddleSubmit = (event) => {
-    event.preventDefault(); // prevent page reload
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    
+    if (!validate()) {
+      return;
+    }
+    
+    setLoading(true);
+    
     axios.post('http://localhost:5000/userRegistration', values)
       .then(response => {
         console.log(response);
         navigate('/');
       })
-      .catch(error => console.log(error));
-  }
+      .catch(error => {
+        console.log(error);
+        alert("Failed to create user. Please try again.");
+        setLoading(false);
+      });
+  };
 
   return (
     <div className="d-flex flex-column vh-100 bg-light justify-content-center align-items-center">
-
-      <h4>Submit Sample Data</h4>
+      <h4>Add New User</h4>
 
       <div className="w-50 mt-2 bg-white rounded p-3">
-
-        <form onSubmit={haddleSubmit}>
-
+        <form onSubmit={handleSubmit}>
           <div className="mb-3">
             <label htmlFor="name" className="form-label">Name</label>
-            <input type="text" className="form-control" id="name" onChange={e => setValues({ ...values, name: e.target.value })} />
+            <input 
+              type="text" 
+              className={`form-control ${errors.name ? 'is-invalid' : ''}`}
+              id="name" 
+              value={values.name}
+              onChange={e => setValues({ ...values, name: e.target.value })} 
+            />
+            {errors.name && <div className="invalid-feedback">{errors.name}</div>}
           </div>
 
           <div className="mb-3">
             <label htmlFor="email" className="form-label">Email</label>
-            <input type="email" className="form-control" id="email" onChange={e => setValues({ ...values, email: e.target.value })} />
+            <input 
+              type="email" 
+              className={`form-control ${errors.email ? 'is-invalid' : ''}`}
+              id="email" 
+              value={values.email}
+              onChange={e => setValues({ ...values, email: e.target.value })} 
+            />
+            {errors.email && <div className="invalid-feedback">{errors.email}</div>}
           </div>
 
           <div className="mb-3">
             <label htmlFor="password" className="form-label">Password</label>
-            <input type="password" className="form-control" id="password" onChange={e => setValues({ ...values, password: e.target.value })} />
+            <input 
+              type="password" 
+              className={`form-control ${errors.password ? 'is-invalid' : ''}`}
+              id="password" 
+              value={values.password}
+              onChange={e => setValues({ ...values, password: e.target.value })} 
+            />
+            {errors.password && <div className="invalid-feedback">{errors.password}</div>}
           </div>
 
-          <button type="submit" className="btn btn-dark">Submit</button>
-
+          <div className="d-flex">
+            <button 
+              type="submit" 
+              className="btn btn-dark" 
+              disabled={loading}
+            >
+              {loading ? (
+                <>
+                  <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                  Submitting...
+                </>
+              ) : 'Submit'}
+            </button>
+            <Link to="/" className="btn btn-outline-dark ms-2">Cancel</Link>
+          </div>
         </form>
-
       </div>
-
     </div>
-  )
-}
+  );
+};
 
-export default Create
+export default Create;
