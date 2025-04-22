@@ -275,7 +275,7 @@ jobs:
           path: checkov-backend-report.json
           retention-days: 30
 
-  # Linting - Run after IaC Scans with ESLint config handling
+  # Linting - Run after IaC Scans with improved ESLint config handling
   frontend-lint:
     name: 🧹 Frontend Lint
     needs: [ frontend-iac, backend-iac ]
@@ -307,16 +307,61 @@ jobs:
           else
             echo "eslint_exists=false" >> $GITHUB_OUTPUT
             echo "No ESLint config found. Creating basic config..."
-            echo "Creating basic ESLint config for React/JSX"
-            npm init @eslint/config -- --quiet \
-              --type module \
-              --module commonjs \
-              --framework react \
-              --jsx \
-              --yes
+            # Install ESLint and necessary plugins manually instead of using the wizard
+            npm install --save-dev eslint eslint-plugin-react
+            # Create a basic .eslintrc.json file
+            cat > .eslintrc.json << EOL
+          {
+            "env": {
+              "browser": true,
+              "es2021": true,
+              "node": true
+            },
+            "extends": [
+              "eslint:recommended",
+              "plugin:react/recommended"
+            ],
+            "parserOptions": {
+              "ecmaFeatures": {
+                "jsx": true
+              },
+              "ecmaVersion": "latest",
+              "sourceType": "module"
+            },
+            "plugins": [
+              "react"
+            ],
+            "rules": {
+              "react/prop-types": "off"
+            },
+            "settings": {
+              "react": {
+                "version": "detect"
+              }
+            }
+          }
+          EOL
+            # Add lint script to package.json if it doesn't exist
+            if ! grep -q "\"lint\":" package.json; then
+              # Using a temporary file to avoid issues with in-place sed on different platforms
+              node -e "
+                const fs = require('fs');
+                const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+                if (!pkg.scripts) pkg.scripts = {};
+                pkg.scripts.lint = 'eslint . --ext .js,.jsx';
+                fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+              "
+            fi
           fi
       - name: Run ESLint
-        run: npm run lint || echo "ESLint failed but continuing pipeline"
+        run: |
+          if [ -f "node_modules/.bin/eslint" ]; then
+            npx eslint . --ext .js,.jsx --max-warnings=0 || echo "ESLint found issues but continuing pipeline"
+          else
+            echo "ESLint binary not found, installing..."
+            npm install --save-dev eslint
+            npx eslint . --ext .js,.jsx --max-warnings=0 || echo "ESLint found issues but continuing pipeline"
+          fi
         continue-on-error: true
 
   backend-lint:
@@ -342,21 +387,70 @@ jobs:
           cache: 'npm'
       - name: Install Dependencies
         run: npm ci
-      - name: Check for Lint Script
+      - name: Check for Lint Script and ESLint
         id: check-lint
         run: |
           if grep -q "\"lint\":" package.json; then
             echo "lint_script_exists=true" >> $GITHUB_OUTPUT
           else
             echo "lint_script_exists=false" >> $GITHUB_OUTPUT
+            
+            # Check if ESLint is already configured
+            if [ -f ".eslintrc.js" ] || [ -f ".eslintrc.json" ] || [ -f ".eslintrc.yml" ] || [ -f ".eslintrc.yaml" ] || [ -f ".eslintrc" ]; then
+              echo "eslint_config_exists=true" >> $GITHUB_OUTPUT
+            else
+              echo "eslint_config_exists=false" >> $GITHUB_OUTPUT
+              echo "No ESLint config found. Creating basic config for Node.js..."
+              
+              # Install ESLint and necessary plugins
+              npm install --save-dev eslint eslint-plugin-node
+              
+              # Create a basic .eslintrc.json file for Node.js
+              cat > .eslintrc.json << EOL
+          {
+            "env": {
+              "node": true,
+              "es2021": true
+            },
+            "extends": [
+              "eslint:recommended",
+              "plugin:node/recommended"
+            ],
+            "parserOptions": {
+              "ecmaVersion": "latest"
+            },
+            "rules": {
+              "node/no-unsupported-features/es-syntax": "off"
+            }
+          }
+          EOL
+              
+              # Add lint script to package.json
+              node -e "
+                const fs = require('fs');
+                const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+                if (!pkg.scripts) pkg.scripts = {};
+                pkg.scripts.lint = 'eslint . --ext .js';
+                fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+              "
+              echo "lint_script_exists=true" >> $GITHUB_OUTPUT
+            fi
           fi
-      - name: Run Lint (if available)
+      - name: Run Lint
         if: steps.check-lint.outputs.lint_script_exists == 'true'
         run: npm run lint || echo "Linting failed but continuing pipeline"
         continue-on-error: true
-      - name: Skip Linting
+      - name: Run ESLint Directly
         if: steps.check-lint.outputs.lint_script_exists != 'true'
-        run: echo "No lint script found in package.json, skipping linting"
+        run: |
+          if [ -f "node_modules/.bin/eslint" ]; then
+            npx eslint . --ext .js --max-warnings=0 || echo "ESLint found issues but continuing pipeline"
+          else
+            echo "ESLint binary not found, installing..."
+            npm install --save-dev eslint
+            npx eslint . --ext .js --max-warnings=0 || echo "ESLint found issues but continuing pipeline"
+          fi
+        continue-on-error: true
 
   # Security Report Aggregation
   security-report:
