@@ -1,529 +1,64 @@
-name: Security Scanning Pipeline
+name: TruffleHog Secret Scanning
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main ]
-
-env:
-  FRONTEND_REPO: crud-app-frontend
-  BACKEND_REPO: crud-app-backend
-  SEMGREP_TOKEN: ${{ secrets.SEMGREP_TOKEN }}
-  SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 0 * * 0'  # Run weekly on Sunday at midnight
 
 jobs:
-  # Secret Scans (TruffleHog) - Run in parallel for frontend and backend
-  frontend-secret-scan:
-    name: 🔒 Frontend Secret Scan
+  secret-scan:
+    name: 🔒 Secret Scan
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        repo: 
+          - {name: 'frontend', path: 'jai3747/crud-app-frontend'}
+          - {name: 'backend', path: 'jai3747/crud-app-backend'}
+      fail-fast: false
+    
     steps:
       - name: Clean workspace
         run: |
-          rm -rf *
+          rm -rf * 
           rm -rf .git
-      - name: Checkout Frontend Code
+        
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/${{ env.FRONTEND_REPO }}
+          repository: ${{ matrix.repo.path }}
           token: ${{ secrets.GH_PAT }}
           fetch-depth: 0
           clean: true
           force: true
+        
       - name: TruffleHog Scan
         uses: trufflesecurity/trufflehog@v3.63.3
         continue-on-error: true
         with:
           path: .
-          base: ${{ github.event.before }}
-          head: ${{ github.sha }}
-          extra_args: --json --output trufflehog-frontend-report.json
+          base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD~50' }}
+          head: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'HEAD' }}
+          extra_args: --debug --only-verified --json --output trufflehog-${{ matrix.repo.name }}-report.json
+        
       - name: Upload Results
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-secret-scan-report
-          path: trufflehog-frontend-report.json
+          name: ${{ matrix.repo.name }}-secret-scan-report
+          path: trufflehog-${{ matrix.repo.name }}-report.json
           retention-days: 30
 
-  backend-secret-scan:
-    name: 🔒 Backend Secret Scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clean workspace
+      - name: Check for secrets
+        id: check_secrets
         run: |
-          rm -rf *
-          rm -rf .git
-      - name: Checkout Backend Code
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/${{ env.BACKEND_REPO }}
-          token: ${{ secrets.GH_PAT }}
-          fetch-depth: 0
-          clean: true
-          force: true
-      - name: TruffleHog Scan
-        uses: trufflesecurity/trufflehog@v3.63.3
-        continue-on-error: true
-        with:
-          path: .
-          base: ${{ github.event.before }}
-          head: ${{ github.sha }}
-          extra_args: --json --output trufflehog-backend-report.json
-      - name: Upload Results
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-secret-scan-report
-          path: trufflehog-backend-report.json
-          retention-days: 30
-
-  # SCA Scans (Snyk) - Run after Secret Scans
-  frontend-sca:
-    name: 📦 Frontend SCA
-    needs: [ frontend-secret-scan, backend-secret-scan ]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clean workspace
-        run: |
-          rm -rf *
-          rm -rf .git
-      - name: Checkout Frontend Code
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/${{ env.FRONTEND_REPO }}
-          token: ${{ secrets.GH_PAT }}
-          clean: true
-          force: true
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - name: Install Dependencies
-        run: npm ci
-      - name: Snyk Scan
-        uses: snyk/actions/node@master
-        continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          command: test --json > snyk-frontend-report.json
-      - name: Upload Results
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-sca-report
-          path: snyk-frontend-report.json
-          retention-days: 30
-
-  backend-sca:
-    name: 📦 Backend SCA
-    needs: [ frontend-secret-scan, backend-secret-scan ]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clean workspace
-        run: |
-          rm -rf *
-          rm -rf .git
-      - name: Checkout Backend Code
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/${{ env.BACKEND_REPO }}
-          token: ${{ secrets.GH_PAT }}
-          clean: true
-          force: true
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - name: Install Dependencies
-        run: npm ci
-      - name: Snyk Scan
-        uses: snyk/actions/node@master
-        continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          command: test --json > snyk-backend-report.json
-      - name: Upload Results
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-sca-report
-          path: snyk-backend-report.json
-          retention-days: 30
-
-  # SAST Scans (Semgrep) - Run after SCA Scans
-  frontend-sast:
-    name: 🔍 Frontend SAST
-    needs: [ frontend-sca, backend-sca ]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clean workspace
-        run: |
-          rm -rf *
-          rm -rf .git
-      - name: Checkout Frontend Code
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/${{ env.FRONTEND_REPO }}
-          token: ${{ secrets.GH_PAT }}
-          clean: true
-          force: true
-      - name: Semgrep Scan
-        uses: semgrep/semgrep-action@v1
-        continue-on-error: true
-        with:
-          config: p/react
-          output: semgrep-frontend-results.json
-          json: true
-      - name: Upload Results
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-sast-report
-          path: semgrep-frontend-results.json
-          retention-days: 30
-
-  backend-sast:
-    name: 🔍 Backend SAST
-    needs: [ frontend-sca, backend-sca ]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clean workspace
-        run: |
-          rm -rf *
-          rm -rf .git
-      - name: Checkout Backend Code
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/${{ env.BACKEND_REPO }}
-          token: ${{ secrets.GH_PAT }}
-          clean: true
-          force: true
-      - name: Semgrep Scan
-        uses: semgrep/semgrep-action@v1
-        continue-on-error: true
-        with:
-          config: p/nodejs
-          output: semgrep-backend-results.json
-          json: true
-      - name: Upload Results
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-sast-report
-          path: semgrep-backend-results.json
-          retention-days: 30
-
-  # IaC Scans (Checkov) - Run after SAST Scans
-  frontend-iac:
-    name: 🏗️ Frontend IaC Scan
-    needs: [ frontend-sast, backend-sast ]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clean workspace
-        run: |
-          rm -rf *
-          rm -rf .git
-      - name: Checkout Frontend Code
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/${{ env.FRONTEND_REPO }}
-          token: ${{ secrets.GH_PAT }}
-          clean: true
-          force: true
-      - name: Checkov Scan
-        uses: bridgecrewio/checkov-action@v12
-        continue-on-error: true
-        with:
-          directory: .
-          framework: dockerfile,kubernetes,secrets
-          output: json
-          output-file-path: checkov-frontend-report.json
-      - name: Upload Results
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-iac-report
-          path: checkov-frontend-report.json
-          retention-days: 30
-
-  backend-iac:
-    name: 🏗️ Backend IaC Scan
-    needs: [ frontend-sast, backend-sast ]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clean workspace
-        run: |
-          rm -rf *
-          rm -rf .git
-      - name: Checkout Backend Code
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/${{ env.BACKEND_REPO }}
-          token: ${{ secrets.GH_PAT }}
-          clean: true
-          force: true
-      - name: Checkov Scan
-        uses: bridgecrewio/checkov-action@v12
-        continue-on-error: true
-        with:
-          directory: .
-          framework: dockerfile,kubernetes,secrets
-          output: json
-          output-file-path: checkov-backend-report.json
-      - name: Upload Results
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-iac-report
-          path: checkov-backend-report.json
-          retention-days: 30
-
-  # Linting - Run after IaC Scans with improved ESLint config handling
-  frontend-lint:
-    name: 🧹 Frontend Lint
-    needs: [ frontend-iac, backend-iac ]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clean workspace
-        run: |
-          rm -rf *
-          rm -rf .git
-      - name: Checkout Frontend Code
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/${{ env.FRONTEND_REPO }}
-          token: ${{ secrets.GH_PAT }}
-          clean: true
-          force: true
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - name: Install Dependencies
-        run: npm ci
-      - name: Check for ESLint Config
-        id: check-eslint
-        run: |
-          if [ -f ".eslintrc.js" ] || [ -f ".eslintrc.json" ] || [ -f ".eslintrc.yml" ] || [ -f ".eslintrc.yaml" ] || [ -f ".eslintrc" ] || grep -q "\"eslintConfig\":" package.json; then
-            echo "eslint_exists=true" >> $GITHUB_OUTPUT
+          if [[ -s trufflehog-${{ matrix.repo.name }}-report.json ]]; then
+            SECRETS_COUNT=$(grep -o "\"Detector\"" trufflehog-${{ matrix.repo.name }}-report.json | wc -l)
+            echo "Found $SECRETS_COUNT potential secrets in ${{ matrix.repo.name }} repository!"
+            echo "::warning::Found $SECRETS_COUNT potential secrets in ${{ matrix.repo.name }} repository!"
+            cat trufflehog-${{ matrix.repo.name }}-report.json
+            exit 1
           else
-            echo "eslint_exists=false" >> $GITHUB_OUTPUT
-            echo "No ESLint config found. Creating basic config..."
-            # Install ESLint and necessary plugins manually instead of using the wizard
-            npm install --save-dev eslint eslint-plugin-react
-            # Create a basic .eslintrc.json file
-            cat > .eslintrc.json << EOL
-          {
-            "env": {
-              "browser": true,
-              "es2021": true,
-              "node": true
-            },
-            "extends": [
-              "eslint:recommended",
-              "plugin:react/recommended"
-            ],
-            "parserOptions": {
-              "ecmaFeatures": {
-                "jsx": true
-              },
-              "ecmaVersion": "latest",
-              "sourceType": "module"
-            },
-            "plugins": [
-              "react"
-            ],
-            "rules": {
-              "react/prop-types": "off"
-            },
-            "settings": {
-              "react": {
-                "version": "detect"
-              }
-            }
-          }
-          EOL
-            # Add lint script to package.json if it doesn't exist
-            if ! grep -q "\"lint\":" package.json; then
-              # Using a temporary file to avoid issues with in-place sed on different platforms
-              node -e "
-                const fs = require('fs');
-                const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-                if (!pkg.scripts) pkg.scripts = {};
-                pkg.scripts.lint = 'eslint . --ext .js,.jsx';
-                fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-              "
-            fi
+            echo "No secrets found in ${{ matrix.repo.name }} repository. All clear!"
           fi
-      - name: Run ESLint
-        run: |
-          if [ -f "node_modules/.bin/eslint" ]; then
-            npx eslint . --ext .js,.jsx --max-warnings=0 || echo "ESLint found issues but continuing pipeline"
-          else
-            echo "ESLint binary not found, installing..."
-            npm install --save-dev eslint
-            npx eslint . --ext .js,.jsx --max-warnings=0 || echo "ESLint found issues but continuing pipeline"
-          fi
-        continue-on-error: true
-
-  backend-lint:
-    name: 🧹 Backend Lint
-    needs: [ frontend-iac, backend-iac ]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clean workspace
-        run: |
-          rm -rf *
-          rm -rf .git
-      - name: Checkout Backend Code
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/${{ env.BACKEND_REPO }}
-          token: ${{ secrets.GH_PAT }}
-          clean: true
-          force: true
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - name: Install Dependencies
-        run: npm ci
-      - name: Check for Lint Script and ESLint
-        id: check-lint
-        run: |
-          if grep -q "\"lint\":" package.json; then
-            echo "lint_script_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "lint_script_exists=false" >> $GITHUB_OUTPUT
-            
-            # Check if ESLint is already configured
-            if [ -f ".eslintrc.js" ] || [ -f ".eslintrc.json" ] || [ -f ".eslintrc.yml" ] || [ -f ".eslintrc.yaml" ] || [ -f ".eslintrc" ]; then
-              echo "eslint_config_exists=true" >> $GITHUB_OUTPUT
-            else
-              echo "eslint_config_exists=false" >> $GITHUB_OUTPUT
-              echo "No ESLint config found. Creating basic config for Node.js..."
-              
-              # Install ESLint and necessary plugins
-              npm install --save-dev eslint eslint-plugin-node
-              
-              # Create a basic .eslintrc.json file for Node.js
-              cat > .eslintrc.json << EOL
-          {
-            "env": {
-              "node": true,
-              "es2021": true
-            },
-            "extends": [
-              "eslint:recommended",
-              "plugin:node/recommended"
-            ],
-            "parserOptions": {
-              "ecmaVersion": "latest"
-            },
-            "rules": {
-              "node/no-unsupported-features/es-syntax": "off"
-            }
-          }
-          EOL
-              
-              # Add lint script to package.json
-              node -e "
-                const fs = require('fs');
-                const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-                if (!pkg.scripts) pkg.scripts = {};
-                pkg.scripts.lint = 'eslint . --ext .js';
-                fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-              "
-              echo "lint_script_exists=true" >> $GITHUB_OUTPUT
-            fi
-          fi
-      - name: Run Lint
-        if: steps.check-lint.outputs.lint_script_exists == 'true'
-        run: npm run lint || echo "Linting failed but continuing pipeline"
-        continue-on-error: true
-      - name: Run ESLint Directly
-        if: steps.check-lint.outputs.lint_script_exists != 'true'
-        run: |
-          if [ -f "node_modules/.bin/eslint" ]; then
-            npx eslint . --ext .js --max-warnings=0 || echo "ESLint found issues but continuing pipeline"
-          else
-            echo "ESLint binary not found, installing..."
-            npm install --save-dev eslint
-            npx eslint . --ext .js --max-warnings=0 || echo "ESLint found issues but continuing pipeline"
-          fi
-        continue-on-error: true
-
-  # Security Report Aggregation
-  security-report:
-    name: 📊 Security Report Generation
-    needs: [frontend-lint, backend-lint]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download All Reports
-        uses: actions/download-artifact@v4
-        with:
-          path: reports
-          
-      - name: Generate Combined Security Report
-        run: |
-          echo "# Combined Security Report for CI/CD Pipeline" > combined-security-report.md
-          echo "## Generated on: $(date)" >> combined-security-report.md
-          
-          echo "## Frontend Security Summary" >> combined-security-report.md
-          echo "- Secret Scan: ✅ Completed" >> combined-security-report.md
-          echo "- SCA Scan: ✅ Completed" >> combined-security-report.md
-          echo "- SAST Scan: ✅ Completed" >> combined-security-report.md
-          echo "- IaC Scan: ✅ Completed" >> combined-security-report.md
-          echo "- Linting: ✅ Completed" >> combined-security-report.md
-          
-          echo "## Backend Security Summary" >> combined-security-report.md
-          echo "- Secret Scan: ✅ Completed" >> combined-security-report.md
-          echo "- SCA Scan: ✅ Completed" >> combined-security-report.md
-          echo "- SAST Scan: ✅ Completed" >> combined-security-report.md
-          echo "- IaC Scan: ✅ Completed" >> combined-security-report.md
-          echo "- Linting: ✅ Completed" >> combined-security-report.md
-          
-          # Summarize frontend secret scan findings
-          if [ -f reports/frontend-secret-scan-report/trufflehog-frontend-report.json ]; then
-            SECRET_COUNT=$(grep -o '"DetectorType":' reports/frontend-secret-scan-report/trufflehog-frontend-report.json | wc -l)
-            echo "### Frontend Secret Detection: $SECRET_COUNT findings" >> combined-security-report.md
-          fi
-          
-          # Summarize backend secret scan findings
-          if [ -f reports/backend-secret-scan-report/trufflehog-backend-report.json ]; then
-            SECRET_COUNT=$(grep -o '"DetectorType":' reports/backend-secret-scan-report/trufflehog-backend-report.json | wc -l)
-            echo "### Backend Secret Detection: $SECRET_COUNT findings" >> combined-security-report.md
-          fi
-          
-          # Summarize frontend SAST findings
-          if [ -f reports/frontend-sast-report/semgrep-frontend-results.json ]; then
-            ISSUE_COUNT=$(grep -o '"results":' reports/frontend-sast-report/semgrep-frontend-results.json | wc -l)
-            echo "### Frontend SAST Issues: $ISSUE_COUNT" >> combined-security-report.md
-          fi
-          
-          # Summarize backend SAST findings
-          if [ -f reports/backend-sast-report/semgrep-backend-results.json ]; then
-            ISSUE_COUNT=$(grep -o '"results":' reports/backend-sast-report/semgrep-backend-results.json | wc -l)
-            echo "### Backend SAST Issues: $ISSUE_COUNT" >> combined-security-report.md
-          fi
-          
-          # Summarize frontend SCA findings
-          if [ -f reports/frontend-sca-report/snyk-frontend-report.json ]; then
-            VULN_COUNT=$(grep -o '"vulnerabilities":' reports/frontend-sca-report/snyk-frontend-report.json | wc -l)
-            echo "### Frontend SCA Vulnerabilities: $VULN_COUNT" >> combined-security-report.md
-          fi
-          
-          # Summarize backend SCA findings
-          if [ -f reports/backend-sca-report/snyk-backend-report.json ]; then
-            VULN_COUNT=$(grep -o '"vulnerabilities":' reports/backend-sca-report/snyk-backend-report.json | wc -l)
-            echo "### Backend SCA Vulnerabilities: $VULN_COUNT" >> combined-security-report.md
-          fi
-          
-          echo "## DISCLAIMER" >> combined-security-report.md
-          echo "This report is generated automatically and should be reviewed by security professionals." >> combined-security-report.md
-      
-      - name: Upload Combined Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: combined-security-report
-          path: combined-security-report.md
-          retention-days: 90
