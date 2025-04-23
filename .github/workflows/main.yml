@@ -1,3 +1,336 @@
+# # name: Complete Secret Scan
+
+# # on:
+# #   push:
+# #     branches: [ main, master ]
+# #   pull_request:
+# #     branches: [ main, master ]
+# #   workflow_dispatch:  # Allow manual triggering
+
+# # jobs:
+# #   scan-repository:
+# #     name: 🔍 Full Repository Scan
+# #     runs-on: ubuntu-latest
+# #     steps:
+# #       - name: Checkout code
+# #         uses: actions/checkout@v4
+# #         with:
+# #           fetch-depth: 0  # Full history for complete scanning
+      
+# #       - name: Install scanning tools
+# #         run: |
+# #           # Install TruffleHog
+# #           curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+          
+# #           # Install gitleaks for additional coverage
+# #           curl -sSfL https://github.com/zricethezav/gitleaks/releases/download/v8.18.1/gitleaks_8.18.1_linux_x64.tar.gz | tar -xzf - -C /tmp
+# #           sudo mv /tmp/gitleaks /usr/local/bin/
+          
+# #           # Install needed utilities
+# #           sudo apt-get update && sudo apt-get install -y jq
+      
+# #       - name: Scan with TruffleHog
+# #         run: |
+# #           # Create results directory
+# #           mkdir -p scan-results
+          
+# #           # Full git history scan
+# #           echo "Scanning entire git history..."
+# #           trufflehog git file://. \
+# #             --json \
+# #             --no-update > scan-results/trufflehog-git.json || true
+          
+# #           # Filesystem scan for current files
+# #           echo "Scanning current files..."
+# #           trufflehog filesystem . \
+# #             --json \
+# #             --no-update > scan-results/trufflehog-fs.json || true
+            
+# #           # Combine results
+# #           cat scan-results/trufflehog-git.json scan-results/trufflehog-fs.json | grep -v "^$" > scan-results/trufflehog-all.json || true
+          
+# #           # Count results
+# #           TOTAL=$(cat scan-results/trufflehog-all.json | grep -v "^$" | wc -l || echo "0")
+# #           echo "TruffleHog found $TOTAL potential secrets"
+      
+# #       - name: Scan with Gitleaks
+# #         run: |
+# #           # Scan repo with gitleaks
+# #           echo "Running Gitleaks scan..."
+# #           gitleaks detect --source . --report-format json --report-path scan-results/gitleaks-results.json || true
+          
+# #           # Process results into a consistent format
+# #           if [ -f "scan-results/gitleaks-results.json" ]; then
+# #             cat scan-results/gitleaks-results.json | jq -c '.[] | {
+# #               "DetectorName": .RuleID,
+# #               "SourceMetadata": {
+# #                 "Data": {
+# #                   "Filesystem": {
+# #                     "file": .File,
+# #                     "line": .StartLine
+# #                   }
+# #                 }
+# #               },
+# #               "Raw": .Secret,
+# #               "Verified": true
+# #             }' > scan-results/gitleaks-formatted.json || true
+# #           else
+# #             echo "[]" > scan-results/gitleaks-formatted.json
+# #           fi
+      
+# #       - name: Scan specific sensitive files
+# #         run: |
+# #           echo "Scanning for specific sensitive patterns..."
+          
+# #           # Look for common sensitive files
+# #           find . -type f \( -name "*.env*" -o -name "*.pem" -o -name "*.key" -o -name "*config*.json" -o -name "*config*.js" -o -name "*secret*" \) > scan-results/sensitive-files.txt
+          
+# #           # Only process if we found matching files
+# #           if [ -s scan-results/sensitive-files.txt ]; then
+# #             touch scan-results/sensitive-results.json
+            
+# #             # Patterns to check for
+# #             while read -r file; do
+# #               if [ -f "$file" ]; then
+# #                 # Common patterns that indicate secrets
+# #                 if grep -q -E "api[_\-]?key|secret|password|token|credential|private[_\-]?key|auth" "$file"; then
+# #                   LINE=$(grep -n -E "api[_\-]?key|secret|password|token|credential|private[_\-]?key|auth" "$file" | head -1 | cut -d: -f1)
+                  
+# #                   # Generate a JSON for this finding
+# #                   echo "{
+# #                     \"DetectorName\": \"SensitiveFile\",
+# #                     \"SourceMetadata\": {
+# #                       \"Data\": {
+# #                         \"Filesystem\": {
+# #                           \"file\": \"$file\",
+# #                           \"line\": $LINE
+# #                         }
+# #                       }
+# #                     },
+# #                     \"Raw\": \"REDACTED\",
+# #                     \"Verified\": false
+# #                   }" >> scan-results/sensitive-results.json
+# #                 fi
+# #               fi
+# #             done < scan-results/sensitive-files.txt
+# #           else
+# #             echo "[]" > scan-results/sensitive-results.json
+# #           fi
+      
+# #       - name: Combine all results
+# #         run: |
+# #           echo "Combining all scanning results..."
+# #           # Merge all scan results
+# #           cat scan-results/trufflehog-all.json scan-results/gitleaks-formatted.json scan-results/sensitive-results.json | grep -v "^$" > scan-results/all-secrets.json || true
+          
+# #           # Count total unique files with issues
+# #           FILES=$(cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | sort | uniq | wc -l)
+# #           TOTAL=$(cat scan-results/all-secrets.json | grep -v "^$" | wc -l)
+# #           VERIFIED=$(cat scan-results/all-secrets.json | grep -v "^$" | grep -c '"Verified":true' || echo "0")
+          
+# #           echo "Found $TOTAL potential secrets in $FILES files ($VERIFIED verified)"
+          
+# #           if [ "$TOTAL" -gt 0 ]; then
+# #             echo "::warning::Found $TOTAL potential secrets in $FILES files!"
+# #           fi
+      
+# #       - name: Generate simple report
+# #         run: |
+# #           # Create a very simple text report
+# #           echo "=========================" > scan-results/simple-report.txt
+# #           echo "SECURITY SCAN REPORT" >> scan-results/simple-report.txt
+# #           echo "=========================" >> scan-results/simple-report.txt
+# #           echo "Scan date: $(date)" >> scan-results/simple-report.txt
+# #           echo "" >> scan-results/simple-report.txt
+          
+# #           TOTAL=$(cat scan-results/all-secrets.json | grep -v "^$" | wc -l || echo "0")
+# #           VERIFIED=$(cat scan-results/all-secrets.json | grep -v "^$" | grep -c '"Verified":true' || echo "0")
+          
+# #           if [ "$TOTAL" -gt 0 ]; then
+# #             echo "⚠️ FOUND $TOTAL POTENTIAL SECRETS ($VERIFIED VERIFIED)" >> scan-results/simple-report.txt
+# #             echo "" >> scan-results/simple-report.txt
+            
+# #             echo "TOP FILES WITH SECRETS:" >> scan-results/simple-report.txt
+# #             echo "----------------------" >> scan-results/simple-report.txt
+# #             cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | sort | uniq -c | sort -nr | head -10 | while read -r count file; do
+# #               if [ -n "$file" ] && [ "$file" != "null" ]; then
+# #                 echo "• $file ($count issues)" >> scan-results/simple-report.txt
+# #               fi
+# #             done
+# #             echo "" >> scan-results/simple-report.txt
+            
+# #             echo "SECRET TYPES FOUND:" >> scan-results/simple-report.txt
+# #             echo "-----------------" >> scan-results/simple-report.txt
+# #             cat scan-results/all-secrets.json | jq -r '.DetectorName' 2>/dev/null | sort | uniq -c | sort -nr | while read -r count type; do
+# #               if [ -n "$type" ] && [ "$type" != "null" ]; then
+# #                 echo "• $type: $count" >> scan-results/simple-report.txt
+# #               fi
+# #             done
+# #             echo "" >> scan-results/simple-report.txt
+            
+# #             echo "DETAILED FINDINGS:" >> scan-results/simple-report.txt
+# #             echo "-----------------" >> scan-results/simple-report.txt
+# #             cat scan-results/all-secrets.json | grep -v "^$" | while read -r line; do
+# #               # Extract data
+# #               TYPE=$(echo "$line" | jq -r '.DetectorName // "Unknown"' 2>/dev/null)
+# #               VERIFIED=$(echo "$line" | jq -r '.Verified // false' 2>/dev/null)
+              
+# #               # Get file and line info
+# #               FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file // "Unknown"' 2>/dev/null)
+# #               LINE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.line // .SourceMetadata.Data.Git.line // "?"' 2>/dev/null)
+              
+# #               # Format verification status
+# #               if [ "$VERIFIED" = "true" ]; then
+# #                 STATUS="✓ VERIFIED"
+# #               else
+# #                 STATUS="POTENTIAL"
+# #               fi
+              
+# #               echo "→ $TYPE in $FILE (line $LINE) - $STATUS" >> scan-results/simple-report.txt
+# #             done
+# #           else
+# #             echo "✅ NO SECRETS FOUND" >> scan-results/simple-report.txt
+# #           fi
+          
+# #           echo "" >> scan-results/simple-report.txt
+# #           echo "HOW TO FIX:" >> scan-results/simple-report.txt
+# #           echo "----------" >> scan-results/simple-report.txt
+# #           echo "1. Remove credentials from code" >> scan-results/simple-report.txt
+# #           echo "2. Add sensitive files to .gitignore" >> scan-results/simple-report.txt
+# #           echo "3. Use environment variables for secrets" >> scan-results/simple-report.txt
+# #           echo "4. Rotate any exposed credentials" >> scan-results/simple-report.txt
+      
+# #       - name: Generate detailed HTML report
+# #         run: |
+# #           cat << EOF > scan-results/detailed-report.html
+# #           <!DOCTYPE html>
+# #           <html>
+# #           <head>
+# #             <title>Security Scan Report</title>
+# #             <style>
+# #               body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }
+# #               table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+# #               th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+# #               th { background-color: #f2f2f2; }
+# #               .verified { background-color: #ffdddd; }
+# #               .potential { background-color: #ffffdd; }
+# #               h1, h2, h3 { color: #333; }
+# #               .summary { background-color: #f8f8f8; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+# #               .high { color: red; font-weight: bold; }
+# #               .medium { color: orange; }
+# #             </style>
+# #           </head>
+# #           <body>
+# #             <h1>Security Scan Report</h1>
+# #             <p>Scan date: $(date)</p>
+            
+# #             <div class="summary">
+# #           EOF
+          
+# #           # Add summary section
+# #           TOTAL=$(cat scan-results/all-secrets.json | grep -v "^$" | wc -l || echo "0")
+# #           VERIFIED=$(cat scan-results/all-secrets.json | grep -v "^$" | grep -c '"Verified":true' || echo "0")
+# #           FILES=$(cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | sort | uniq | wc -l)
+          
+# #           if [ "$TOTAL" -gt 0 ]; then
+# #             echo "<h2>🚨 Found $TOTAL potential secrets in $FILES files</h2>" >> scan-results/detailed-report.html
+# #             echo "<p><span class='high'>$VERIFIED verified secrets</span> require immediate attention.</p>" >> scan-results/detailed-report.html
+# #           else
+# #             echo "<h2>✅ No secrets found</h2>" >> scan-results/detailed-report.html
+# #             echo "<p>Your code appears to be free from exposed secrets and credentials.</p>" >> scan-results/detailed-report.html
+# #           fi
+          
+# #           echo "</div>" >> scan-results/detailed-report.html
+          
+# #           # Only add details if we found secrets
+# #           if [ "$TOTAL" -gt 0 ]; then
+# #             # Add file summary
+# #             echo "<h3>Files with Secrets:</h3>" >> scan-results/detailed-report.html
+# #             echo "<table>" >> scan-results/detailed-report.html
+# #             echo "<tr><th>File</th><th>Issues</th><th>Verified</th></tr>" >> scan-results/detailed-report.html
+            
+# #             # Process each file with issues
+# #             cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | sort | uniq > scan-results/affected-files.txt
+            
+# #             while read -r file; do
+# #               if [ -n "$file" ] && [ "$file" != "null" ]; then
+# #                 # Count issues in this file
+# #                 ISSUES=$(cat scan-results/all-secrets.json | grep "\"$file\"" | wc -l)
+# #                 VERIFIED_ISSUES=$(cat scan-results/all-secrets.json | grep "\"$file\"" | grep -c '"Verified":true' || echo "0")
+                
+# #                 # Add row to table
+# #                 echo "<tr>" >> scan-results/detailed-report.html
+# #                 echo "<td>$file</td>" >> scan-results/detailed-report.html
+# #                 echo "<td>$ISSUES</td>" >> scan-results/detailed-report.html
+                
+# #                 if [ "$VERIFIED_ISSUES" -gt 0 ]; then
+# #                   echo "<td class='high'>$VERIFIED_ISSUES</td>" >> scan-results/detailed-report.html
+# #                 else
+# #                   echo "<td>0</td>" >> scan-results/detailed-report.html
+# #                 fi
+                
+# #                 echo "</tr>" >> scan-results/detailed-report.html
+# #               fi
+# #             done < scan-results/affected-files.txt
+            
+# #             echo "</table>" >> scan-results/detailed-report.html
+            
+# #             # Add detailed findings
+# #             echo "<h3>Detailed Findings:</h3>" >> scan-results/detailed-report.html
+# #             echo "<table>" >> scan-results/detailed-report.html
+# #             echo "<tr><th>Type</th><th>File</th><th>Line</th><th>Status</th></tr>" >> scan-results/detailed-report.html
+            
+# #             cat scan-results/all-secrets.json | grep -v "^$" | while read -r line; do
+# #               # Extract data
+# #               TYPE=$(echo "$line" | jq -r '.DetectorName // "Unknown"' 2>/dev/null)
+# #               VERIFIED=$(echo "$line" | jq -r '.Verified // false' 2>/dev/null)
+              
+# #               # Get file and line info
+# #               FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file // "Unknown"' 2>/dev/null)
+# #               LINE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.line // .SourceMetadata.Data.Git.line // "?"' 2>/dev/null)
+              
+# #               # Set row class and status
+# #               if [ "$VERIFIED" = "true" ]; then
+# #                 CLASS="verified"
+# #                 STATUS="<span class='high'>VERIFIED</span>"
+# #               else
+# #                 CLASS="potential"
+# #                 STATUS="<span class='medium'>POTENTIAL</span>"
+# #               fi
+              
+# #               # Add row to table
+# #               echo "<tr class='$CLASS'>" >> scan-results/detailed-report.html
+# #               echo "<td>$TYPE</td>" >> scan-results/detailed-report.html
+# #               echo "<td>$FILE</td>" >> scan-results/detailed-report.html
+# #               echo "<td>$LINE</td>" >> scan-results/detailed-report.html
+# #               echo "<td>$STATUS</td>" >> scan-results/detailed-report.html
+# #               echo "</tr>" >> scan-results/detailed-report.html
+# #             done
+            
+# #             echo "</table>" >> scan-results/detailed-report.html
+            
+# #             # Add remediation advice
+# #             echo "<h3>How to Fix These Issues:</h3>" >> scan-results/detailed-report.html
+# #             echo "<ol>" >> scan-results/detailed-report.html
+# #             echo "<li><strong>Remove all credentials</strong> from your code and configuration files</li>" >> scan-results/detailed-report.html
+# #             echo "<li><strong>Use environment variables</strong> for all sensitive information</li>" >> scan-results/detailed-report.html
+# #             echo "<li><strong>Add sensitive files</strong> (.env, config files with credentials) to .gitignore</li>" >> scan-results/detailed-report.html
+# #             echo "<li><strong>Rotate any exposed credentials</strong> immediately</li>" >> scan-results/detailed-report.html
+# #             echo "<li><strong>Consider using a secret manager</strong> for your production environment</li>" >> scan-results/detailed-report.html
+# #             echo "</ol>" >> scan-results/detailed-report.html
+# #           fi
+          
+# #           echo "</body></html>" >> scan-results/detailed-report.html
+
+# #       - name: Upload scan reports
+# #         uses: actions/upload-artifact@v4
+# #         with:
+# #           name: security-scan-reports
+# #           path: |
+# #             scan-results/simple-report.txt
+# #             scan-results/detailed-report.html
+# #             scan-results/all-secrets.json
+# #           retention-days: 30
 # name: Complete Secret Scan
 
 # on:
@@ -49,8 +382,11 @@
 #           # Combine results
 #           cat scan-results/trufflehog-git.json scan-results/trufflehog-fs.json | grep -v "^$" > scan-results/trufflehog-all.json || true
           
+#           # Create empty file if not exists
+#           touch scan-results/trufflehog-all.json
+          
 #           # Count results
-#           TOTAL=$(cat scan-results/trufflehog-all.json | grep -v "^$" | wc -l || echo "0")
+#           TOTAL=$(grep -v "^$" scan-results/trufflehog-all.json | wc -l || echo "0")
 #           echo "TruffleHog found $TOTAL potential secrets"
       
 #       - name: Scan with Gitleaks
@@ -60,7 +396,7 @@
 #           gitleaks detect --source . --report-format json --report-path scan-results/gitleaks-results.json || true
           
 #           # Process results into a consistent format
-#           if [ -f "scan-results/gitleaks-results.json" ]; then
+#           if [ -f "scan-results/gitleaks-results.json" ] && [ -s "scan-results/gitleaks-results.json" ]; then
 #             cat scan-results/gitleaks-results.json | jq -c '.[] | {
 #               "DetectorName": .RuleID,
 #               "SourceMetadata": {
@@ -77,6 +413,9 @@
 #           else
 #             echo "[]" > scan-results/gitleaks-formatted.json
 #           fi
+          
+#           # Create empty file if not exists
+#           touch scan-results/gitleaks-formatted.json
       
 #       - name: Scan specific sensitive files
 #         run: |
@@ -85,16 +424,19 @@
 #           # Look for common sensitive files
 #           find . -type f \( -name "*.env*" -o -name "*.pem" -o -name "*.key" -o -name "*config*.json" -o -name "*config*.js" -o -name "*secret*" \) > scan-results/sensitive-files.txt
           
+#           # Create empty results file
+#           touch scan-results/sensitive-results.json
+          
 #           # Only process if we found matching files
 #           if [ -s scan-results/sensitive-files.txt ]; then
-#             touch scan-results/sensitive-results.json
-            
 #             # Patterns to check for
 #             while read -r file; do
 #               if [ -f "$file" ]; then
 #                 # Common patterns that indicate secrets
 #                 if grep -q -E "api[_\-]?key|secret|password|token|credential|private[_\-]?key|auth" "$file"; then
 #                   LINE=$(grep -n -E "api[_\-]?key|secret|password|token|credential|private[_\-]?key|auth" "$file" | head -1 | cut -d: -f1)
+#                   # Default to line 1 if grep doesn't return a line number
+#                   LINE=${LINE:-1}
                   
 #                   # Generate a JSON for this finding
 #                   echo "{
@@ -113,20 +455,24 @@
 #                 fi
 #               fi
 #             done < scan-results/sensitive-files.txt
-#           else
-#             echo "[]" > scan-results/sensitive-results.json
 #           fi
       
 #       - name: Combine all results
 #         run: |
 #           echo "Combining all scanning results..."
+#           # Ensure all files exist
+#           touch scan-results/trufflehog-all.json scan-results/gitleaks-formatted.json scan-results/sensitive-results.json
+          
 #           # Merge all scan results
 #           cat scan-results/trufflehog-all.json scan-results/gitleaks-formatted.json scan-results/sensitive-results.json | grep -v "^$" > scan-results/all-secrets.json || true
           
+#           # Make sure the combined file exists
+#           touch scan-results/all-secrets.json
+          
 #           # Count total unique files with issues
-#           FILES=$(cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | sort | uniq | wc -l)
-#           TOTAL=$(cat scan-results/all-secrets.json | grep -v "^$" | wc -l)
-#           VERIFIED=$(cat scan-results/all-secrets.json | grep -v "^$" | grep -c '"Verified":true' || echo "0")
+#           FILES=$(cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | grep -v '^null$' | grep -v '^$' | sort | uniq | wc -l || echo "0")
+#           TOTAL=$(grep -v "^$" scan-results/all-secrets.json | wc -l || echo "0")
+#           VERIFIED=$(grep -v "^$" scan-results/all-secrets.json | grep -c '"Verified":true' || echo "0")
           
 #           echo "Found $TOTAL potential secrets in $FILES files ($VERIFIED verified)"
           
@@ -143,8 +489,8 @@
 #           echo "Scan date: $(date)" >> scan-results/simple-report.txt
 #           echo "" >> scan-results/simple-report.txt
           
-#           TOTAL=$(cat scan-results/all-secrets.json | grep -v "^$" | wc -l || echo "0")
-#           VERIFIED=$(cat scan-results/all-secrets.json | grep -v "^$" | grep -c '"Verified":true' || echo "0")
+#           TOTAL=$(grep -v "^$" scan-results/all-secrets.json | wc -l || echo "0")
+#           VERIFIED=$(grep -v "^$" scan-results/all-secrets.json | grep -c '"Verified":true' || echo "0")
           
 #           if [ "$TOTAL" -gt 0 ]; then
 #             echo "⚠️ FOUND $TOTAL POTENTIAL SECRETS ($VERIFIED VERIFIED)" >> scan-results/simple-report.txt
@@ -152,42 +498,65 @@
             
 #             echo "TOP FILES WITH SECRETS:" >> scan-results/simple-report.txt
 #             echo "----------------------" >> scan-results/simple-report.txt
-#             cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | sort | uniq -c | sort -nr | head -10 | while read -r count file; do
-#               if [ -n "$file" ] && [ "$file" != "null" ]; then
-#                 echo "• $file ($count issues)" >> scan-results/simple-report.txt
+            
+#             # Process files safely
+#             cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | 
+#               grep -v '^null$' | grep -v '^$' | sort | uniq -c | sort -nr | head -10 > scan-results/top-files.txt
+            
+#             while read -r line; do
+#               if [ -n "$line" ]; then
+#                 echo "• $line" | sed 's/^ *[0-9]* //' | sed 's/$/ ('"$(echo "$line" | awk '{print $1}')"' issues)/' >> scan-results/simple-report.txt
 #               fi
-#             done
+#             done < scan-results/top-files.txt
+            
 #             echo "" >> scan-results/simple-report.txt
             
 #             echo "SECRET TYPES FOUND:" >> scan-results/simple-report.txt
 #             echo "-----------------" >> scan-results/simple-report.txt
-#             cat scan-results/all-secrets.json | jq -r '.DetectorName' 2>/dev/null | sort | uniq -c | sort -nr | while read -r count type; do
-#               if [ -n "$type" ] && [ "$type" != "null" ]; then
-#                 echo "• $type: $count" >> scan-results/simple-report.txt
+            
+#             # Process types safely
+#             cat scan-results/all-secrets.json | jq -r '.DetectorName' 2>/dev/null | 
+#               grep -v '^null$' | grep -v '^$' | sort | uniq -c | sort -nr > scan-results/detector-types.txt
+            
+#             while read -r line; do
+#               if [ -n "$line" ]; then
+#                 TYPE=$(echo "$line" | sed 's/^ *[0-9]* //')
+#                 COUNT=$(echo "$line" | awk '{print $1}')
+#                 if [ -n "$TYPE" ] && [ "$TYPE" != "null" ]; then
+#                   echo "• $TYPE: $COUNT" >> scan-results/simple-report.txt
+#                 fi
 #               fi
-#             done
+#             done < scan-results/detector-types.txt
+            
 #             echo "" >> scan-results/simple-report.txt
             
 #             echo "DETAILED FINDINGS:" >> scan-results/simple-report.txt
 #             echo "-----------------" >> scan-results/simple-report.txt
-#             cat scan-results/all-secrets.json | grep -v "^$" | while read -r line; do
-#               # Extract data
-#               TYPE=$(echo "$line" | jq -r '.DetectorName // "Unknown"' 2>/dev/null)
-#               VERIFIED=$(echo "$line" | jq -r '.Verified // false' 2>/dev/null)
-              
-#               # Get file and line info
-#               FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file // "Unknown"' 2>/dev/null)
-#               LINE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.line // .SourceMetadata.Data.Git.line // "?"' 2>/dev/null)
-              
-#               # Format verification status
-#               if [ "$VERIFIED" = "true" ]; then
-#                 STATUS="✓ VERIFIED"
-#               else
-#                 STATUS="POTENTIAL"
+            
+#             # Write to temp file first for safer processing
+#             cat scan-results/all-secrets.json | grep -v "^$" > scan-results/valid-findings.json
+            
+#             # Process each finding safely
+#             while read -r line; do
+#               if [ -n "$line" ]; then
+#                 # Extract data safely
+#                 TYPE=$(echo "$line" | jq -r '.DetectorName // "Unknown"' 2>/dev/null)
+#                 VERIFIED=$(echo "$line" | jq -r '.Verified // false' 2>/dev/null)
+                
+#                 # Get file and line info safely
+#                 FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file // "Unknown"' 2>/dev/null)
+#                 LINE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.line // .SourceMetadata.Data.Git.line // "?"' 2>/dev/null)
+                
+#                 # Format verification status
+#                 if [ "$VERIFIED" = "true" ]; then
+#                   STATUS="✓ VERIFIED"
+#                 else
+#                   STATUS="POTENTIAL"
+#                 fi
+                
+#                 echo "→ $TYPE in $FILE (line $LINE) - $STATUS" >> scan-results/simple-report.txt
 #               fi
-              
-#               echo "→ $TYPE in $FILE (line $LINE) - $STATUS" >> scan-results/simple-report.txt
-#             done
+#             done < scan-results/valid-findings.json
 #           else
 #             echo "✅ NO SECRETS FOUND" >> scan-results/simple-report.txt
 #           fi
@@ -228,9 +597,9 @@
 #           EOF
           
 #           # Add summary section
-#           TOTAL=$(cat scan-results/all-secrets.json | grep -v "^$" | wc -l || echo "0")
-#           VERIFIED=$(cat scan-results/all-secrets.json | grep -v "^$" | grep -c '"Verified":true' || echo "0")
-#           FILES=$(cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | sort | uniq | wc -l)
+#           TOTAL=$(grep -v "^$" scan-results/all-secrets.json | wc -l || echo "0")
+#           VERIFIED=$(grep -v "^$" scan-results/all-secrets.json | grep -c '"Verified":true' || echo "0")
+#           FILES=$(cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | grep -v '^null$' | grep -v '^$' | sort | uniq | wc -l || echo "0")
           
 #           if [ "$TOTAL" -gt 0 ]; then
 #             echo "<h2>🚨 Found $TOTAL potential secrets in $FILES files</h2>" >> scan-results/detailed-report.html
@@ -249,13 +618,14 @@
 #             echo "<table>" >> scan-results/detailed-report.html
 #             echo "<tr><th>File</th><th>Issues</th><th>Verified</th></tr>" >> scan-results/detailed-report.html
             
-#             # Process each file with issues
-#             cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | sort | uniq > scan-results/affected-files.txt
+#             # Process each file with issues safely
+#             cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | 
+#               grep -v '^null$' | grep -v '^$' | sort | uniq > scan-results/affected-files.txt
             
 #             while read -r file; do
 #               if [ -n "$file" ] && [ "$file" != "null" ]; then
-#                 # Count issues in this file
-#                 ISSUES=$(cat scan-results/all-secrets.json | grep "\"$file\"" | wc -l)
+#                 # Count issues in this file safely
+#                 ISSUES=$(cat scan-results/all-secrets.json | grep "\"$file\"" | wc -l || echo "0")
 #                 VERIFIED_ISSUES=$(cat scan-results/all-secrets.json | grep "\"$file\"" | grep -c '"Verified":true' || echo "0")
                 
 #                 # Add row to table
@@ -280,32 +650,37 @@
 #             echo "<table>" >> scan-results/detailed-report.html
 #             echo "<tr><th>Type</th><th>File</th><th>Line</th><th>Status</th></tr>" >> scan-results/detailed-report.html
             
-#             cat scan-results/all-secrets.json | grep -v "^$" | while read -r line; do
-#               # Extract data
-#               TYPE=$(echo "$line" | jq -r '.DetectorName // "Unknown"' 2>/dev/null)
-#               VERIFIED=$(echo "$line" | jq -r '.Verified // false' 2>/dev/null)
-              
-#               # Get file and line info
-#               FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file // "Unknown"' 2>/dev/null)
-#               LINE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.line // .SourceMetadata.Data.Git.line // "?"' 2>/dev/null)
-              
-#               # Set row class and status
-#               if [ "$VERIFIED" = "true" ]; then
-#                 CLASS="verified"
-#                 STATUS="<span class='high'>VERIFIED</span>"
-#               else
-#                 CLASS="potential"
-#                 STATUS="<span class='medium'>POTENTIAL</span>"
+#             # Process each finding safely
+#             cat scan-results/all-secrets.json | grep -v "^$" > scan-results/valid-findings.json
+            
+#             while read -r line; do
+#               if [ -n "$line" ]; then
+#                 # Extract data safely
+#                 TYPE=$(echo "$line" | jq -r '.DetectorName // "Unknown"' 2>/dev/null)
+#                 VERIFIED=$(echo "$line" | jq -r '.Verified // false' 2>/dev/null)
+                
+#                 # Get file and line info safely
+#                 FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file // "Unknown"' 2>/dev/null)
+#                 LINE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.line // .SourceMetadata.Data.Git.line // "?"' 2>/dev/null)
+                
+#                 # Set row class and status
+#                 if [ "$VERIFIED" = "true" ]; then
+#                   CLASS="verified"
+#                   STATUS="<span class='high'>VERIFIED</span>"
+#                 else
+#                   CLASS="potential"
+#                   STATUS="<span class='medium'>POTENTIAL</span>"
+#                 fi
+                
+#                 # Add row to table
+#                 echo "<tr class='$CLASS'>" >> scan-results/detailed-report.html
+#                 echo "<td>$TYPE</td>" >> scan-results/detailed-report.html
+#                 echo "<td>$FILE</td>" >> scan-results/detailed-report.html
+#                 echo "<td>$LINE</td>" >> scan-results/detailed-report.html
+#                 echo "<td>$STATUS</td>" >> scan-results/detailed-report.html
+#                 echo "</tr>" >> scan-results/detailed-report.html
 #               fi
-              
-#               # Add row to table
-#               echo "<tr class='$CLASS'>" >> scan-results/detailed-report.html
-#               echo "<td>$TYPE</td>" >> scan-results/detailed-report.html
-#               echo "<td>$FILE</td>" >> scan-results/detailed-report.html
-#               echo "<td>$LINE</td>" >> scan-results/detailed-report.html
-#               echo "<td>$STATUS</td>" >> scan-results/detailed-report.html
-#               echo "</tr>" >> scan-results/detailed-report.html
-#             done
+#             done < scan-results/valid-findings.json
             
 #             echo "</table>" >> scan-results/detailed-report.html
             
@@ -362,11 +737,11 @@ jobs:
           # Install needed utilities
           sudo apt-get update && sudo apt-get install -y jq
       
+      - name: Create results directory
+        run: mkdir -p scan-results
+      
       - name: Scan with TruffleHog
         run: |
-          # Create results directory
-          mkdir -p scan-results
-          
           # Full git history scan
           echo "Scanning entire git history..."
           trufflehog git file://. \
@@ -379,73 +754,81 @@ jobs:
             --json \
             --no-update > scan-results/trufflehog-fs.json || true
             
-          # Combine results
-          cat scan-results/trufflehog-git.json scan-results/trufflehog-fs.json | grep -v "^$" > scan-results/trufflehog-all.json || true
+          # Ensure files exist
+          touch scan-results/trufflehog-git.json scan-results/trufflehog-fs.json
           
-          # Create empty file if not exists
+          # Safely combine results - one JSON object per line
+          cat scan-results/trufflehog-git.json scan-results/trufflehog-fs.json | grep -v "^$" > scan-results/trufflehog-all.json || true
           touch scan-results/trufflehog-all.json
           
           # Count results
-          TOTAL=$(grep -v "^$" scan-results/trufflehog-all.json | wc -l || echo "0")
+          TOTAL=$(grep -c . scan-results/trufflehog-all.json || echo "0")
           echo "TruffleHog found $TOTAL potential secrets"
       
       - name: Scan with Gitleaks
         run: |
-          # Scan repo with gitleaks
+          # Scan repo with gitleaks - force non-zero exit
           echo "Running Gitleaks scan..."
           gitleaks detect --source . --report-format json --report-path scan-results/gitleaks-results.json || true
           
-          # Process results into a consistent format
-          if [ -f "scan-results/gitleaks-results.json" ] && [ -s "scan-results/gitleaks-results.json" ]; then
-            cat scan-results/gitleaks-results.json | jq -c '.[] | {
-              "DetectorName": .RuleID,
-              "SourceMetadata": {
-                "Data": {
-                  "Filesystem": {
-                    "file": .File,
-                    "line": .StartLine
+          # Ensure file exists
+          touch scan-results/gitleaks-results.json
+          
+          # Format the results consistently, handling empty files
+          if [ -s "scan-results/gitleaks-results.json" ]; then
+            # Check if the file starts with '[' indicating proper JSON array
+            if [[ $(head -c 1 scan-results/gitleaks-results.json) == "[" ]]; then
+              cat scan-results/gitleaks-results.json | jq -c '.[] | {
+                "DetectorName": (.RuleID // "UnknownRule"),
+                "SourceMetadata": {
+                  "Data": {
+                    "Filesystem": {
+                      "file": (.File // "UnknownFile"),
+                      "line": (.StartLine // 0)
+                    }
                   }
-                }
-              },
-              "Raw": .Secret,
-              "Verified": true
-            }' > scan-results/gitleaks-formatted.json || true
+                },
+                "Raw": (.Secret // "Redacted"),
+                "Verified": true
+              }' > scan-results/gitleaks-formatted.json 2>/dev/null || echo "[]" > scan-results/gitleaks-formatted.json
+            else
+              echo "[]" > scan-results/gitleaks-formatted.json
+            fi
           else
             echo "[]" > scan-results/gitleaks-formatted.json
           fi
-          
-          # Create empty file if not exists
-          touch scan-results/gitleaks-formatted.json
       
       - name: Scan specific sensitive files
         run: |
           echo "Scanning for specific sensitive patterns..."
           
+          # Create empty result file
+          echo "[]" > scan-results/sensitive-results.json
+          
           # Look for common sensitive files
-          find . -type f \( -name "*.env*" -o -name "*.pem" -o -name "*.key" -o -name "*config*.json" -o -name "*config*.js" -o -name "*secret*" \) > scan-results/sensitive-files.txt
+          find . -type f \( -name "*.env*" -o -name "*.pem" -o -name "*.key" -o -name "*config*.json" -o -name "*config*.js" -o -name "*secret*" \) -not -path "*/node_modules/*" -not -path "*/.git/*" > scan-results/sensitive-files.txt || true
           
-          # Create empty results file
-          touch scan-results/sensitive-results.json
+          # Create empty file in case find fails
+          touch scan-results/sensitive-files.txt
           
-          # Only process if we found matching files
+          # Only process if we found matching files and the file isn't empty
           if [ -s scan-results/sensitive-files.txt ]; then
-            # Patterns to check for
+            # Process each file
             while read -r file; do
               if [ -f "$file" ]; then
-                # Common patterns that indicate secrets
-                if grep -q -E "api[_\-]?key|secret|password|token|credential|private[_\-]?key|auth" "$file"; then
-                  LINE=$(grep -n -E "api[_\-]?key|secret|password|token|credential|private[_\-]?key|auth" "$file" | head -1 | cut -d: -f1)
-                  # Default to line 1 if grep doesn't return a line number
-                  LINE=${LINE:-1}
+                # Check for common secret patterns
+                if grep -q -E "api[_\-]?key|secret|password|token|credential|private[_\-]?key|auth" "$file" 2>/dev/null; then
+                  # Find line number of first match
+                  LINE=$(grep -n -E "api[_\-]?key|secret|password|token|credential|private[_\-]?key|auth" "$file" 2>/dev/null | head -1 | cut -d: -f1 || echo "1")
                   
-                  # Generate a JSON for this finding
+                  # Generate a finding record
                   echo "{
                     \"DetectorName\": \"SensitiveFile\",
                     \"SourceMetadata\": {
                       \"Data\": {
                         \"Filesystem\": {
-                          \"file\": \"$file\",
-                          \"line\": $LINE
+                          \"file\": \"${file//\"/\\\"}\",
+                          \"line\": ${LINE:-1}
                         }
                       }
                     },
@@ -460,19 +843,45 @@ jobs:
       - name: Combine all results
         run: |
           echo "Combining all scanning results..."
-          # Ensure all files exist
+          
+          # Ensure files exist
           touch scan-results/trufflehog-all.json scan-results/gitleaks-formatted.json scan-results/sensitive-results.json
           
-          # Merge all scan results
-          cat scan-results/trufflehog-all.json scan-results/gitleaks-formatted.json scan-results/sensitive-results.json | grep -v "^$" > scan-results/all-secrets.json || true
+          # Create a directory for processed files
+          mkdir -p scan-results/processed
           
-          # Make sure the combined file exists
+          # Process each file to ensure valid JSON objects
+          for file in scan-results/trufflehog-all.json scan-results/gitleaks-formatted.json scan-results/sensitive-results.json; do
+            # Create corresponding output file
+            output_file="scan-results/processed/$(basename $file)"
+            touch "$output_file"
+            
+            # Process non-empty files line by line
+            if [ -s "$file" ]; then
+              while IFS= read -r line || [ -n "$line" ]; do
+                # Only process non-empty lines
+                if [ -n "$line" ]; then
+                  # Check if line is valid JSON
+                  if echo "$line" | jq '.' > /dev/null 2>&1; then
+                    echo "$line" >> "$output_file"
+                  fi
+                fi
+              done < "$file"
+            fi
+          done
+          
+          # Combine processed results
+          cat scan-results/processed/*.json > scan-results/all-secrets.json || true
           touch scan-results/all-secrets.json
           
-          # Count total unique files with issues
-          FILES=$(cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | grep -v '^null$' | grep -v '^$' | sort | uniq | wc -l || echo "0")
-          TOTAL=$(grep -v "^$" scan-results/all-secrets.json | wc -l || echo "0")
-          VERIFIED=$(grep -v "^$" scan-results/all-secrets.json | grep -c '"Verified":true' || echo "0")
+          # Count results
+          TOTAL=$(grep -c . scan-results/all-secrets.json || echo "0")
+          # Count verified secrets
+          VERIFIED=$(grep -c '"Verified":true' scan-results/all-secrets.json || echo "0")
+          
+          # Extract unique files (handle JSON structure properly)
+          cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | grep -v '^null$' | grep -v '^$' | sort | uniq > scan-results/affected-files.txt || touch scan-results/affected-files.txt
+          FILES=$(wc -l < scan-results/affected-files.txt | xargs || echo "0")
           
           echo "Found $TOTAL potential secrets in $FILES files ($VERIFIED verified)"
           
@@ -482,15 +891,19 @@ jobs:
       
       - name: Generate simple report
         run: |
-          # Create a very simple text report
-          echo "=========================" > scan-results/simple-report.txt
-          echo "SECURITY SCAN REPORT" >> scan-results/simple-report.txt
-          echo "=========================" >> scan-results/simple-report.txt
-          echo "Scan date: $(date)" >> scan-results/simple-report.txt
-          echo "" >> scan-results/simple-report.txt
+          # Create very simple text report
+          cat << EOF > scan-results/simple-report.txt
+=========================
+SECURITY SCAN REPORT
+=========================
+Scan date: $(date)
+
+EOF
           
-          TOTAL=$(grep -v "^$" scan-results/all-secrets.json | wc -l || echo "0")
-          VERIFIED=$(grep -v "^$" scan-results/all-secrets.json | grep -c '"Verified":true' || echo "0")
+          # Count findings
+          TOTAL=$(grep -c . scan-results/all-secrets.json || echo "0")
+          VERIFIED=$(grep -c '"Verified":true' scan-results/all-secrets.json || echo "0")
+          FILES=$(wc -l < scan-results/affected-files.txt | xargs || echo "0")
           
           if [ "$TOTAL" -gt 0 ]; then
             echo "⚠️ FOUND $TOTAL POTENTIAL SECRETS ($VERIFIED VERIFIED)" >> scan-results/simple-report.txt
@@ -499,53 +912,61 @@ jobs:
             echo "TOP FILES WITH SECRETS:" >> scan-results/simple-report.txt
             echo "----------------------" >> scan-results/simple-report.txt
             
-            # Process files safely
+            # Create counts of secrets per file (safely)
             cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | 
-              grep -v '^null$' | grep -v '^$' | sort | uniq -c | sort -nr | head -10 > scan-results/top-files.txt
+              grep -v '^null$' | grep -v '^$' | sort | uniq -c | sort -nr | head -10 > scan-results/file-stats.txt || true
             
+            # Format the output
             while read -r line; do
-              if [ -n "$line" ]; then
-                echo "• $line" | sed 's/^ *[0-9]* //' | sed 's/$/ ('"$(echo "$line" | awk '{print $1}')"' issues)/' >> scan-results/simple-report.txt
+              count=$(echo "$line" | awk '{print $1}')
+              file=$(echo "$line" | cut -d' ' -f2-)
+              if [ -n "$file" ] && [ "$file" != "null" ]; then
+                echo "• $file ($count issues)" >> scan-results/simple-report.txt
               fi
-            done < scan-results/top-files.txt
+            done < scan-results/file-stats.txt
             
             echo "" >> scan-results/simple-report.txt
             
             echo "SECRET TYPES FOUND:" >> scan-results/simple-report.txt
             echo "-----------------" >> scan-results/simple-report.txt
             
-            # Process types safely
+            # Create counts of detector types (safely)
             cat scan-results/all-secrets.json | jq -r '.DetectorName' 2>/dev/null | 
-              grep -v '^null$' | grep -v '^$' | sort | uniq -c | sort -nr > scan-results/detector-types.txt
+              grep -v '^null$' | grep -v '^$' | sort | uniq -c | sort -nr > scan-results/detector-stats.txt || true
             
+            # Format the output
             while read -r line; do
-              if [ -n "$line" ]; then
-                TYPE=$(echo "$line" | sed 's/^ *[0-9]* //')
-                COUNT=$(echo "$line" | awk '{print $1}')
-                if [ -n "$TYPE" ] && [ "$TYPE" != "null" ]; then
-                  echo "• $TYPE: $COUNT" >> scan-results/simple-report.txt
-                fi
+              count=$(echo "$line" | awk '{print $1}')
+              type=$(echo "$line" | cut -d' ' -f2-)
+              if [ -n "$type" ] && [ "$type" != "null" ]; then
+                echo "• $type: $count" >> scan-results/simple-report.txt
               fi
-            done < scan-results/detector-types.txt
+            done < scan-results/detector-stats.txt
             
             echo "" >> scan-results/simple-report.txt
             
-            echo "DETAILED FINDINGS:" >> scan-results/simple-report.txt
-            echo "-----------------" >> scan-results/simple-report.txt
+            echo "DETAILED FINDINGS (SAMPLE):" >> scan-results/simple-report.txt
+            echo "-------------------------" >> scan-results/simple-report.txt
             
-            # Write to temp file first for safer processing
-            cat scan-results/all-secrets.json | grep -v "^$" > scan-results/valid-findings.json
+            # For large result sets, limit to a sample
+            if [ "$TOTAL" -gt 50 ]; then
+              head -50 scan-results/all-secrets.json > scan-results/sample-secrets.json
+              echo "Showing 50 out of $TOTAL findings. See detailed report for full list." >> scan-results/simple-report.txt
+              echo "" >> scan-results/simple-report.txt
+            else
+              cp scan-results/all-secrets.json scan-results/sample-secrets.json
+            fi
             
-            # Process each finding safely
-            while read -r line; do
+            # Process each sample finding
+            cat scan-results/sample-secrets.json | while read -r line; do
               if [ -n "$line" ]; then
                 # Extract data safely
-                TYPE=$(echo "$line" | jq -r '.DetectorName // "Unknown"' 2>/dev/null)
-                VERIFIED=$(echo "$line" | jq -r '.Verified // false' 2>/dev/null)
+                TYPE=$(echo "$line" | jq -r '.DetectorName // "Unknown"' 2>/dev/null || echo "Unknown")
+                VERIFIED=$(echo "$line" | jq -r '.Verified // false' 2>/dev/null || echo "false")
                 
-                # Get file and line info safely
-                FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file // "Unknown"' 2>/dev/null)
-                LINE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.line // .SourceMetadata.Data.Git.line // "?"' 2>/dev/null)
+                # Get file and line info
+                FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file // "Unknown"' 2>/dev/null || echo "Unknown")
+                LINE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.line // .SourceMetadata.Data.Git.line // "?"' 2>/dev/null || echo "?")
                 
                 # Format verification status
                 if [ "$VERIFIED" = "true" ]; then
@@ -556,50 +977,54 @@ jobs:
                 
                 echo "→ $TYPE in $FILE (line $LINE) - $STATUS" >> scan-results/simple-report.txt
               fi
-            done < scan-results/valid-findings.json
+            done
           else
             echo "✅ NO SECRETS FOUND" >> scan-results/simple-report.txt
           fi
           
-          echo "" >> scan-results/simple-report.txt
-          echo "HOW TO FIX:" >> scan-results/simple-report.txt
-          echo "----------" >> scan-results/simple-report.txt
-          echo "1. Remove credentials from code" >> scan-results/simple-report.txt
-          echo "2. Add sensitive files to .gitignore" >> scan-results/simple-report.txt
-          echo "3. Use environment variables for secrets" >> scan-results/simple-report.txt
-          echo "4. Rotate any exposed credentials" >> scan-results/simple-report.txt
+          # Add recommendations
+          cat << EOF >> scan-results/simple-report.txt
+
+HOW TO FIX:
+----------
+1. Remove credentials from code
+2. Add sensitive files to .gitignore
+3. Use environment variables for secrets
+4. Rotate any exposed credentials
+EOF
       
       - name: Generate detailed HTML report
         run: |
+          # Create basic HTML report structure
           cat << EOF > scan-results/detailed-report.html
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <title>Security Scan Report</title>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }
-              table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
-              th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-              th { background-color: #f2f2f2; }
-              .verified { background-color: #ffdddd; }
-              .potential { background-color: #ffffdd; }
-              h1, h2, h3 { color: #333; }
-              .summary { background-color: #f8f8f8; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
-              .high { color: red; font-weight: bold; }
-              .medium { color: orange; }
-            </style>
-          </head>
-          <body>
-            <h1>Security Scan Report</h1>
-            <p>Scan date: $(date)</p>
-            
-            <div class="summary">
-          EOF
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Security Scan Report</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background-color: #f2f2f2; }
+    .verified { background-color: #ffdddd; }
+    .potential { background-color: #ffffdd; }
+    h1, h2, h3 { color: #333; }
+    .summary { background-color: #f8f8f8; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+    .high { color: red; font-weight: bold; }
+    .medium { color: orange; }
+  </style>
+</head>
+<body>
+  <h1>Security Scan Report</h1>
+  <p>Scan date: $(date)</p>
+  
+  <div class="summary">
+EOF
           
           # Add summary section
-          TOTAL=$(grep -v "^$" scan-results/all-secrets.json | wc -l || echo "0")
-          VERIFIED=$(grep -v "^$" scan-results/all-secrets.json | grep -c '"Verified":true' || echo "0")
-          FILES=$(cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | grep -v '^null$' | grep -v '^$' | sort | uniq | wc -l || echo "0")
+          TOTAL=$(grep -c . scan-results/all-secrets.json || echo "0")
+          VERIFIED=$(grep -c '"Verified":true' scan-results/all-secrets.json || echo "0")
+          FILES=$(wc -l < scan-results/affected-files.txt | xargs || echo "0")
           
           if [ "$TOTAL" -gt 0 ]; then
             echo "<h2>🚨 Found $TOTAL potential secrets in $FILES files</h2>" >> scan-results/detailed-report.html
@@ -618,50 +1043,84 @@ jobs:
             echo "<table>" >> scan-results/detailed-report.html
             echo "<tr><th>File</th><th>Issues</th><th>Verified</th></tr>" >> scan-results/detailed-report.html
             
-            # Process each file with issues safely
-            cat scan-results/all-secrets.json | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file' 2>/dev/null | 
-              grep -v '^null$' | grep -v '^$' | sort | uniq > scan-results/affected-files.txt
-            
-            while read -r file; do
+            # Process each file with issues
+            cat scan-results/file-stats.txt | head -25 | while read -r line; do
+              count=$(echo "$line" | awk '{print $1}')
+              file=$(echo "$line" | cut -d' ' -f2-)
+              
               if [ -n "$file" ] && [ "$file" != "null" ]; then
-                # Count issues in this file safely
-                ISSUES=$(cat scan-results/all-secrets.json | grep "\"$file\"" | wc -l || echo "0")
-                VERIFIED_ISSUES=$(cat scan-results/all-secrets.json | grep "\"$file\"" | grep -c '"Verified":true' || echo "0")
+                # Count verified issues for this file
+                verified_count=$(cat scan-results/all-secrets.json | grep -F "\"$file\"" | grep -c '"Verified":true' || echo "0")
                 
                 # Add row to table
                 echo "<tr>" >> scan-results/detailed-report.html
                 echo "<td>$file</td>" >> scan-results/detailed-report.html
-                echo "<td>$ISSUES</td>" >> scan-results/detailed-report.html
+                echo "<td>$count</td>" >> scan-results/detailed-report.html
                 
-                if [ "$VERIFIED_ISSUES" -gt 0 ]; then
-                  echo "<td class='high'>$VERIFIED_ISSUES</td>" >> scan-results/detailed-report.html
+                if [ "$verified_count" -gt 0 ]; then
+                  echo "<td class='high'>$verified_count</td>" >> scan-results/detailed-report.html
                 else
                   echo "<td>0</td>" >> scan-results/detailed-report.html
                 fi
                 
                 echo "</tr>" >> scan-results/detailed-report.html
               fi
-            done < scan-results/affected-files.txt
+            done
             
             echo "</table>" >> scan-results/detailed-report.html
             
-            # Add detailed findings
+            # Add detector type summary
+            echo "<h3>Types of Secrets Found:</h3>" >> scan-results/detailed-report.html
+            echo "<table>" >> scan-results/detailed-report.html
+            echo "<tr><th>Detector</th><th>Count</th><th>Verified</th></tr>" >> scan-results/detailed-report.html
+            
+            cat scan-results/detector-stats.txt | while read -r line; do
+              count=$(echo "$line" | awk '{print $1}')
+              type=$(echo "$line" | cut -d' ' -f2-)
+              
+              if [ -n "$type" ] && [ "$type" != "null" ]; then
+                # Count verified issues for this type
+                verified_count=$(cat scan-results/all-secrets.json | grep -F "\"$type\"" | grep -c '"Verified":true' || echo "0")
+                
+                # Add row to table
+                echo "<tr>" >> scan-results/detailed-report.html
+                echo "<td>$type</td>" >> scan-results/detailed-report.html
+                echo "<td>$count</td>" >> scan-results/detailed-report.html
+                
+                if [ "$verified_count" -gt 0 ]; then
+                  echo "<td class='high'>$verified_count</td>" >> scan-results/detailed-report.html
+                else
+                  echo "<td>0</td>" >> scan-results/detailed-report.html
+                fi
+                
+                echo "</tr>" >> scan-results/detailed-report.html
+              fi
+            done
+            
+            echo "</table>" >> scan-results/detailed-report.html
+            
+            # Add detailed findings (limit for large result sets)
             echo "<h3>Detailed Findings:</h3>" >> scan-results/detailed-report.html
+            
+            if [ "$TOTAL" -gt 200 ]; then
+              echo "<p>Showing first 200 of $TOTAL findings.</p>" >> scan-results/detailed-report.html
+              head -200 scan-results/all-secrets.json > scan-results/html-sample.json
+            else
+              cp scan-results/all-secrets.json scan-results/html-sample.json
+            fi
+            
             echo "<table>" >> scan-results/detailed-report.html
             echo "<tr><th>Type</th><th>File</th><th>Line</th><th>Status</th></tr>" >> scan-results/detailed-report.html
             
-            # Process each finding safely
-            cat scan-results/all-secrets.json | grep -v "^$" > scan-results/valid-findings.json
-            
-            while read -r line; do
+            # Process each finding (limited sample)
+            cat scan-results/html-sample.json | while read -r line; do
               if [ -n "$line" ]; then
-                # Extract data safely
-                TYPE=$(echo "$line" | jq -r '.DetectorName // "Unknown"' 2>/dev/null)
-                VERIFIED=$(echo "$line" | jq -r '.Verified // false' 2>/dev/null)
+                # Extract data safely using echo+grep to avoid jq errors
+                TYPE=$(echo "$line" | jq -r '.DetectorName // "Unknown"' 2>/dev/null || echo "Unknown")
+                VERIFIED=$(echo "$line" | jq -r '.Verified // false' 2>/dev/null || echo "false")
                 
-                # Get file and line info safely
-                FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file // "Unknown"' 2>/dev/null)
-                LINE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.line // .SourceMetadata.Data.Git.line // "?"' 2>/dev/null)
+                FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file // "Unknown"' 2>/dev/null || echo "Unknown")
+                LINE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.line // .SourceMetadata.Data.Git.line // "?"' 2>/dev/null || echo "?")
                 
                 # Set row class and status
                 if [ "$VERIFIED" = "true" ]; then
@@ -680,7 +1139,7 @@ jobs:
                 echo "<td>$STATUS</td>" >> scan-results/detailed-report.html
                 echo "</tr>" >> scan-results/detailed-report.html
               fi
-            done < scan-results/valid-findings.json
+            done
             
             echo "</table>" >> scan-results/detailed-report.html
             
