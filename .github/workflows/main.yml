@@ -1,4 +1,4 @@
-name: TruffleHog Secret Scanning
+name: TruffleHog Comprehensive Secret Scanning
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
 
 jobs:
   secret-scan:
-    name: 🔍 Secret Scan
+    name: 🔍 Complete Secret Scan
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -31,71 +31,105 @@ jobs:
         with:
           repository: ${{ matrix.repo.path }}
           token: ${{ secrets.GH_PAT }}
-          fetch-depth: 0
+          fetch-depth: 0  # Full history
           clean: true
           force: true
-        
-      - name: Run TruffleHog Scan
-        id: trufflehog
+      
+      - name: Install jq
         run: |
-          docker run --rm -v "$PWD:/pwd" trufflesecurity/trufflehog:latest \
-            github --repo=${{ matrix.repo.path }} \
-            --token=${{ secrets.GH_PAT }} \
-            --only-verified \
-            --json > trufflehog-${{ matrix.repo.name }}-raw.json
+          sudo apt-get update
+          sudo apt-get install -y jq
+        
+      - name: TruffleHog Direct Scan
+        id: trufflehog_scan
+        run: |
+          # Install TruffleHog
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+
+          # Run both git and filesystem scans to catch all secrets
+          echo "Running git history scan..."
+          trufflehog git file://. --json --no-update --include-detectors all > git-scan-results.json || true
           
-          # Create a human-readable report
-          echo "# 🔒 TruffleHog Secret Scan Report for ${{ matrix.repo.path }}" > trufflehog-${{ matrix.repo.name }}-report.md
-          echo "Generated on: $(date)" >> trufflehog-${{ matrix.repo.name }}-report.md
-          echo "" >> trufflehog-${{ matrix.repo.name }}-report.md
+          echo "Running filesystem scan (including .env files)..."
+          trufflehog filesystem --directory=. --json --include-detectors all > fs-scan-results.json || true
           
-          if [ -s "trufflehog-${{ matrix.repo.name }}-raw.json" ]; then
-            echo "## ⚠️ Secrets Found!" >> trufflehog-${{ matrix.repo.name }}-report.md
-            echo "" >> trufflehog-${{ matrix.repo.name }}-report.md
+          # Combine results
+          echo "Combining results..."
+          cat git-scan-results.json fs-scan-results.json > all-results.json
+          
+          # Create report
+          echo "# Secret Scanning Report for ${{ matrix.repo.path }}" > secret-report.md
+          echo "Scan completed on: $(date)" >> secret-report.md
+          echo "" >> secret-report.md
+          
+          if [ -s all-results.json ]; then
+            # Count unique secrets
+            SECRET_COUNT=$(cat all-results.json | grep -v "^$" | wc -l)
+            echo "## ⚠️ $SECRET_COUNT potential secrets found!" >> secret-report.md
+            echo "" >> secret-report.md
             
-            echo "| Secret Type | File | Line | Commit |" >> trufflehog-${{ matrix.repo.name }}-report.md
-            echo "| ----------- | ---- | ---- | ------ |" >> trufflehog-${{ matrix.repo.name }}-report.md
+            # Create a details table
+            echo "| Secret Type | Source | File | Line | Severity |" >> secret-report.md
+            echo "|------------|--------|------|------|----------|" >> secret-report.md
             
-            # Parse JSON and format for markdown
-            cat trufflehog-${{ matrix.repo.name }}-raw.json | jq -r '.DetectorType + " | " + .SourceMetadata.Data.Filename + " | " + (.SourceMetadata.Data.Line|tostring) + " | " + .SourceMetadata.Data.Commit' >> trufflehog-${{ matrix.repo.name }}-report.md
+            # Process each finding
+            cat all-results.json | grep -v "^$" | while read -r line; do
+              DETECTOR=$(echo $line | jq -r '.DetectorType // "Unknown"')
+              SOURCE=$(echo $line | jq -r '.SourceType // "Unknown"')
+              FILE=$(echo $line | jq -r '.SourceMetadata.Data.Filename // .SourceMetadata.Data.Path // "Unknown"')
+              LINE=$(echo $line | jq -r '.SourceMetadata.Data.Line // "N/A"')
+              VERIFIED=$(echo $line | jq -r '.Verified // false')
+              
+              # Determine severity
+              if [ "$VERIFIED" = "true" ]; then
+                SEVERITY="🔴 High"
+              else
+                SEVERITY="🟡 Medium"
+              fi
+              
+              echo "| $DETECTOR | $SOURCE | $FILE | $LINE | $SEVERITY |" >> secret-report.md
+            done
             
-            echo "" >> trufflehog-${{ matrix.repo.name }}-report.md
-            echo "## Remediation Steps" >> trufflehog-${{ matrix.repo.name }}-report.md
-            echo "1. Remove the secrets from your repository" >> trufflehog-${{ matrix.repo.name }}-report.md
-            echo "2. Revoke all exposed secrets" >> trufflehog-${{ matrix.repo.name }}-report.md
-            echo "3. Use environment variables or secret management tools instead" >> trufflehog-${{ matrix.repo.name }}-report.md
+            echo "" >> secret-report.md
+            echo "## 🚨 Remediation Steps" >> secret-report.md
+            echo "" >> secret-report.md
+            echo "1. **Remove all hardcoded secrets** from your codebase, including .env files that might be committed" >> secret-report.md
+            echo "2. **Revoke all exposed credentials** immediately" >> secret-report.md
+            echo "3. **Replace with environment variables** or a secure secret management system" >> secret-report.md
+            echo "4. **Add .env files to .gitignore** to prevent future commits" >> secret-report.md
+            echo "5. **Consider using git-filter-repo** to remove secrets from git history" >> secret-report.md
             
-            echo "::warning::Secrets detected in ${{ matrix.repo.path }}!"
             echo "secrets_found=true" >> $GITHUB_OUTPUT
+            echo "::warning::$SECRET_COUNT potential secrets found in ${{ matrix.repo.path }}"
           else
-            echo "## ✅ No Secrets Found" >> trufflehog-${{ matrix.repo.name }}-report.md
-            echo "" >> trufflehog-${{ matrix.repo.name }}-report.md
-            echo "No verified secrets were detected in this repository." >> trufflehog-${{ matrix.repo.name }}-report.md
-            
+            echo "## ✅ No secrets found" >> secret-report.md
+            echo "" >> secret-report.md
+            echo "No secrets or credentials were detected in this repository." >> secret-report.md
             echo "secrets_found=false" >> $GITHUB_OUTPUT
           fi
         
       - name: Upload Raw Results
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.repo.name }}-secret-scan-raw
-          path: trufflehog-${{ matrix.repo.name }}-raw.json
+          name: ${{ matrix.repo.name }}-raw-results
+          path: all-results.json
           retention-days: 30
           
-      - name: Upload Formatted Report
+      - name: Upload Report
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.repo.name }}-secret-scan-report
-          path: trufflehog-${{ matrix.repo.name }}-report.md
+          name: ${{ matrix.repo.name }}-secret-report
+          path: secret-report.md
           retention-days: 30
-
-      - name: Fail if secrets found
-        if: steps.trufflehog.outputs.secrets_found == 'true'
+        
+      - name: Fail if verified secrets found
+        if: steps.trufflehog_scan.outputs.secrets_found == 'true'
         run: |
-          echo "::error::Security issue: Secrets were found in ${{ matrix.repo.path }}!"
-          echo "Please check the artifact '${{ matrix.repo.name }}-secret-scan-report' for details."
+          echo "::error::Secrets found in ${{ matrix.repo.path }}! Check the artifacts for details."
+          echo "Displaying the first few findings:"
+          head -n 10 all-results.json
           exit 1
-      
+  
   summary-report:
     name: 📊 Summary Report
     needs: secret-scan
@@ -109,28 +143,37 @@ jobs:
           
       - name: Generate summary report
         run: |
-          echo "# 🔍 Secret Scanning Summary Report" > summary-report.md
-          echo "Generated on: $(date)" >> summary-report.md
+          echo "# 🔒 Secret Scanning Summary" > summary-report.md
+          echo "Generated: $(date)" >> summary-report.md
           echo "" >> summary-report.md
           
           # Check Frontend
-          if [ -s "all-reports/frontend-secret-scan-raw/trufflehog-frontend-raw.json" ]; then
-            FRONTEND_COUNT=$(cat all-reports/frontend-secret-scan-raw/trufflehog-frontend-raw.json | wc -l)
-            echo "## Frontend Repository: ⚠️ $FRONTEND_COUNT secrets found" >> summary-report.md
+          if [ -s "all-reports/frontend-raw-results/all-results.json" ]; then
+            FRONTEND_COUNT=$(cat all-reports/frontend-raw-results/all-results.json | grep -v "^$" | wc -l)
+            echo "## Frontend Repository: ⚠️ $FRONTEND_COUNT potential secrets found" >> summary-report.md
+            echo "📋 [View detailed report](../artifact/frontend-secret-report/secret-report.md)" >> summary-report.md
           else
             echo "## Frontend Repository: ✅ No secrets found" >> summary-report.md
           fi
           
+          echo "" >> summary-report.md
+          
           # Check Backend
-          if [ -s "all-reports/backend-secret-scan-raw/trufflehog-backend-raw.json" ]; then
-            BACKEND_COUNT=$(cat all-reports/backend-secret-scan-raw/trufflehog-backend-raw.json | wc -l)
-            echo "## Backend Repository: ⚠️ $BACKEND_COUNT secrets found" >> summary-report.md
+          if [ -s "all-reports/backend-raw-results/all-results.json" ]; then
+            BACKEND_COUNT=$(cat all-reports/backend-raw-results/all-results.json | grep -v "^$" | wc -l)
+            echo "## Backend Repository: ⚠️ $BACKEND_COUNT potential secrets found" >> summary-report.md
+            echo "📋 [View detailed report](../artifact/backend-secret-report/secret-report.md)" >> summary-report.md
           else
             echo "## Backend Repository: ✅ No secrets found" >> summary-report.md
           fi
           
           echo "" >> summary-report.md
-          echo "For detailed reports, download the individual artifacts." >> summary-report.md
+          echo "## Next Steps" >> summary-report.md
+          echo "" >> summary-report.md
+          echo "- Review all findings in the detailed reports" >> summary-report.md
+          echo "- Remove all hardcoded secrets and credentials" >> summary-report.md
+          echo "- Use environment variables or secret management tools" >> summary-report.md
+          echo "- Update your .gitignore to prevent committing sensitive files" >> summary-report.md
           
       - name: Upload Summary Report
         uses: actions/upload-artifact@v4
