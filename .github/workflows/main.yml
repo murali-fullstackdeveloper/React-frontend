@@ -1,17 +1,16 @@
-name: Security Pipeline
+name: Snyk Security Scan
 
 on:
   push:
-    branches: [ "main", "develop" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "develop" ]
+    branches: [ "main" ]
   schedule:
     - cron: '0 0 * * 0'  # Run weekly on Sundays at midnight
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
   security_scan:
-    name: Snyk Security Scanning
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -20,13 +19,12 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
-          cache: 'npm'
+          node-version: '16'
           
       - name: Install dependencies
         run: |
           if [ -f package.json ]; then
-            npm ci
+            npm install
           fi
           
       # Run Snyk scan
@@ -38,17 +36,8 @@ jobs:
         with:
           args: --all-projects --detection-depth=999 --json-file-output=snyk-results.json
           
-      # Run npm audit for additional security coverage
-      - name: Run npm audit
-        if: always()
-        continue-on-error: true
-        run: |
-          if [ -f package.json ]; then
-            npm audit --json > npm-audit-results.json || true
-          fi
-          
-      # Generate HTML report for Snyk
-      - name: Generate Snyk HTML report
+      # Generate HTML report
+      - name: Generate HTML report
         if: always()
         continue-on-error: true
         run: |
@@ -57,22 +46,16 @@ jobs:
             snyk-to-html -i snyk-results.json -o snyk-report.html
           fi
           
-      # Process results and create comprehensive report
-      - name: Process security results
+      # Create simple vulnerability count and summary
+      - name: Count vulnerabilities
         if: always()
         run: |
-          mkdir -p security-reports
-          
-          echo "## Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "## Snyk Security Scan Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Install jq for JSON processing
-          sudo apt-get update -qq && sudo apt-get install -y jq
-          
-          # Process Snyk results
           if [ -f snyk-results.json ]; then
-            echo "### Snyk Scan Results" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
+            # Install jq for JSON processing
+            sudo apt-get update -qq && sudo apt-get install -y jq
             
             # Count vulnerabilities by severity
             high_count=$(grep -o '"severity":"high"' snyk-results.json | wc -l)
@@ -87,190 +70,25 @@ jobs:
             echo "| 🟠 Medium   | $medium_count |" >> $GITHUB_STEP_SUMMARY
             echo "| 🟡 Low      | $low_count |" >> $GITHUB_STEP_SUMMARY
             echo "| **TOTAL**   | **$total** |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
             
-            # Generate detailed report
-            echo "# SECURITY SCAN DETAILS" > security-reports/security-report.md
-            echo "Scan completed on $(date)" >> security-reports/security-report.md
-            echo "" >> security-reports/security-report.md
-            echo "## VULNERABILITY SUMMARY" >> security-reports/security-report.md
-            echo "High: $high_count" >> security-reports/security-report.md
-            echo "Medium: $medium_count" >> security-reports/security-report.md
-            echo "Low: $low_count" >> security-reports/security-report.md
-            echo "Total: $total" >> security-reports/security-report.md
-            echo "" >> security-reports/security-report.md
-            
-            # Process high severity vulnerabilities
-            if [ $high_count -gt 0 ]; then
-              echo "### HIGH SEVERITY ISSUES" >> security-reports/security-report.md
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "### 🔴 High Severity Issues" >> $GITHUB_STEP_SUMMARY
-              echo "" >> security-reports/security-report.md
-              
-              # Extract each high severity vulnerability
-              cat snyk-results.json | jq -r '.vulnerabilities[] | select(.severity == "high") | "- Package: " + .packageName + " (version " + .version + ")\n  Issue: " + .title + "\n  Fix: Upgrade to " + (.fixedIn[0] // "latest version") + "\n  Link: " + (.references[0].url // "N/A") + "\n"' >> security-reports/security-report.md
-              
-              # Add to GitHub summary
-              cat snyk-results.json | jq -r '.vulnerabilities[] | select(.severity == "high") | "- **" + .title + "** in " + .packageName + " " + .version + " (Fix: " + (.fixedIn[0] // "latest version") + ")"' >> $GITHUB_STEP_SUMMARY
-            fi
-            
-            # Process medium severity vulnerabilities
-            if [ $medium_count -gt 0 ]; then
-              echo "" >> security-reports/security-report.md
-              echo "### MEDIUM SEVERITY ISSUES" >> security-reports/security-report.md
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "### 🟠 Medium Severity Issues" >> $GITHUB_STEP_SUMMARY
-              echo "" >> security-reports/security-report.md
-              
-              cat snyk-results.json | jq -r '.vulnerabilities[] | select(.severity == "medium") | "- Package: " + .packageName + " (version " + .version + ")\n  Issue: " + .title + "\n  Fix: Upgrade to " + (.fixedIn[0] // "latest version") + "\n  Link: " + (.references[0].url // "N/A") + "\n"' >> security-reports/security-report.md
-              
-              cat snyk-results.json | jq -r '.vulnerabilities[] | select(.severity == "medium") | "- **" + .title + "** in " + .packageName + " " + .version + " (Fix: " + (.fixedIn[0] // "latest version") + ")"' >> $GITHUB_STEP_SUMMARY
-            fi
-            
-            # Process low severity vulnerabilities
-            if [ $low_count -gt 0 ]; then
-              echo "" >> security-reports/security-report.md
-              echo "### LOW SEVERITY ISSUES" >> security-reports/security-report.md
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "### 🟡 Low Severity Issues" >> $GITHUB_STEP_SUMMARY
-              echo "" >> security-reports/security-report.md
-              
-              cat snyk-results.json | jq -r '.vulnerabilities[] | select(.severity == "low") | "- Package: " + .packageName + " (version " + .version + ")\n  Issue: " + .title + "\n  Fix: Upgrade to " + (.fixedIn[0] // "latest version") + "\n  Link: " + (.references[0].url // "N/A") + "\n"' >> security-reports/security-report.md
-              
-              cat snyk-results.json | jq -r '.vulnerabilities[] | select(.severity == "low") | "- **" + .title + "** in " + .packageName + " " + .version + " (Fix: " + (.fixedIn[0] // "latest version") + ")"' >> $GITHUB_STEP_SUMMARY
-            fi
-            
-            # Generate remediation steps
-            echo "" >> security-reports/security-report.md
-            echo "## REMEDIATION STEPS" >> security-reports/security-report.md
-            echo "" >> security-reports/security-report.md
-            
-            echo "### Dependency Updates" >> security-reports/security-report.md
-            echo "" >> security-reports/security-report.md
-            echo "Run the following commands to fix the identified issues:" >> security-reports/security-report.md
-            echo "\`\`\`bash" >> security-reports/security-report.md
-            cat snyk-results.json | jq -r '.vulnerabilities[] | "npm install " + .packageName + "@" + (.fixedIn[0] // "latest")' | sort -u >> security-reports/security-report.md
-            echo "\`\`\`" >> security-reports/security-report.md
-            
-            # Add remediation to GitHub summary
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 🔧 Remediation" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Run the following commands to fix the issues:" >> $GITHUB_STEP_SUMMARY
-            echo "```bash" >> $GITHUB_STEP_SUMMARY
-            cat snyk-results.json | jq -r '.vulnerabilities[] | "npm install " + .packageName + "@" + (.fixedIn[0] // "latest")' | sort -u >> $GITHUB_STEP_SUMMARY
-            echo "```" >> $GITHUB_STEP_SUMMARY
+            # Save counts to a simple text file
+            echo "# VULNERABILITY SUMMARY" > vulnerability-count.txt
+            echo "High: $high_count" >> vulnerability-count.txt
+            echo "Medium: $medium_count" >> vulnerability-count.txt
+            echo "Low: $low_count" >> vulnerability-count.txt
+            echo "Total: $total" >> vulnerability-count.txt
           else
-            echo "No Snyk scan results available." >> $GITHUB_STEP_SUMMARY
+            echo "No Snyk scan results found or scan failed." >> $GITHUB_STEP_SUMMARY
+            echo "No vulnerabilities found or scan failed." > vulnerability-count.txt
           fi
           
-          # Process npm audit results if they exist
-          if [ -f npm-audit-results.json ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### npm Audit Results" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            # Extract vulnerability counts
-            critical_count=$(jq '.metadata.vulnerabilities.critical' npm-audit-results.json)
-            high_count=$(jq '.metadata.vulnerabilities.high' npm-audit-results.json)
-            moderate_count=$(jq '.metadata.vulnerabilities.moderate' npm-audit-results.json)
-            low_count=$(jq '.metadata.vulnerabilities.low' npm-audit-results.json)
-            total=$((critical_count + high_count + moderate_count + low_count))
-            
-            # Write summary table
-            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
-            echo "| -------- | ----- |" >> $GITHUB_STEP_SUMMARY
-            echo "| ⚫ Critical | $critical_count |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🔴 High     | $high_count |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟠 Moderate | $moderate_count |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟡 Low      | $low_count |" >> $GITHUB_STEP_SUMMARY
-            echo "| **TOTAL**   | **$total** |" >> $GITHUB_STEP_SUMMARY
-            
-            # Add npm audit details to security report
-            echo "" >> security-reports/security-report.md
-            echo "## NPM AUDIT RESULTS" >> security-reports/security-report.md
-            echo "Critical: $critical_count" >> security-reports/security-report.md
-            echo "High: $high_count" >> security-reports/security-report.md
-            echo "Moderate: $moderate_count" >> security-reports/security-report.md
-            echo "Low: $low_count" >> security-reports/security-report.md
-            echo "Total: $total" >> security-reports/security-report.md
-            
-            # Add npm audit fix commands
-            echo "" >> security-reports/security-report.md
-            echo "Run the following to fix npm audit issues:" >> security-reports/security-report.md
-            echo "\`\`\`bash" >> security-reports/security-report.md
-            echo "npm audit fix" >> security-reports/security-report.md
-            echo "# For major version changes:" >> security-reports/security-report.md
-            echo "# npm audit fix --force  # Use with caution!" >> security-reports/security-report.md
-            echo "\`\`\`" >> security-reports/security-report.md
-          fi
-          
-          # Copy reports
-          if [ -f snyk-report.html ]; then
-            cp snyk-report.html security-reports/
-          fi
-          
-          if [ -f snyk-results.json ]; then
-            cp snyk-results.json security-reports/
-          fi
-          
-          if [ -f npm-audit-results.json ]; then
-            cp npm-audit-results.json security-reports/
-          fi
-          
-          # Create index.html for reports
-          echo "<!DOCTYPE html>
-          <html>
-          <head>
-            <title>Security Scan Reports</title>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 20px; }
-              h1 { color: #333; }
-              .report-link { display: block; margin: 10px 0; }
-            </style>
-          </head>
-          <body>
-            <h1>Security Scan Reports</h1>
-            <p>The following reports are available:</p>
-            <a class='report-link' href='security-report.md'>Security Report (Markdown)</a>
-            <a class='report-link' href='snyk-report.html'>Snyk HTML Report</a>
-          </body>
-          </html>" > security-reports/index.html
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📋 Reports" >> $GITHUB_STEP_SUMMARY
-          echo "Security reports have been generated in the security-reports directory." >> $GITHUB_STEP_SUMMARY
-          
-      - name: Upload security reports
+      # Upload reports
+      - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v3
         with:
           name: security-reports
-          path: security-reports/
-
-  notify:
-    name: Notification
-    needs: [security_scan]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Send status notification
-        run: |
-          echo "## Security Scan Complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Status:** ${{ needs.security_scan.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Check the security-reports artifact for detailed information." >> $GITHUB_STEP_SUMMARY
-          
-      # Uncomment and configure to send Slack notification
-      # - name: Send Slack notification
-      #   uses: rtCamp/action-slack-notify@v2
-      #   env:
-      #     SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-      #     SLACK_CHANNEL: security-alerts
-      #     SLACK_COLOR: ${{ needs.security_scan.result == 'success' && 'good' || 'danger' }}
-      #     SLACK_TITLE: Security Scan Results
-      #     SLACK_MESSAGE: "Security scan completed with status: ${{ needs.security_scan.result }}"
+          path: |
+            snyk-results.json
+            snyk-report.html
+            vulnerability-count.txt
