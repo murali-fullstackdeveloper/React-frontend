@@ -509,7 +509,7 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          args: --all-projects --severity-threshold=high --json-file-output=snyk-results.json
+          args: --all-projects --org=${{ secrets.SNYK_ORG }} --scan-all-unmanaged --detection-depth=999 --json-file-output=snyk-results.json
           
       - name: Generate HTML report
         if: always()
@@ -519,7 +519,7 @@ jobs:
           
       - name: Upload security report
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v2  # Downgraded from v3 to v2
         with:
           name: snyk-security-report
           path: |
@@ -527,11 +527,36 @@ jobs:
             snyk-report.html
           retention-days: 7
           
+      # Create summary report in the GitHub Actions interface
+      - name: Create summary report
+        if: always()
+        run: |
+          echo "## Snyk Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f snyk-results.json ]; then
+            high_count=$(grep -o '"severity":"high"' snyk-results.json | wc -l)
+            medium_count=$(grep -o '"severity":"medium"' snyk-results.json | wc -l)
+            low_count=$(grep -o '"severity":"low"' snyk-results.json | wc -l)
+            
+            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "| -------- | ----- |" >> $GITHUB_STEP_SUMMARY
+            echo "| High     | $high_count |" >> $GITHUB_STEP_SUMMARY
+            echo "| Medium   | $medium_count |" >> $GITHUB_STEP_SUMMARY
+            echo "| Low      | $low_count |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Full report available in workflow artifacts." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No results file found!" >> $GITHUB_STEP_SUMMARY
+          fi
+          
       # Optional: Fail the pipeline if high severity issues found
       - name: Check for high severity issues
         if: always()
         run: |
           if grep -q '"severity":"high"' snyk-results.json; then
-            echo "High severity vulnerabilities were found!"
+            echo "❌ High severity vulnerabilities were found!"
             exit 1
+          else
+            echo "✅ No high severity vulnerabilities found."
           fi
