@@ -17,15 +17,9 @@ jobs:
       - name: Semgrep Scan
         uses: semgrep/semgrep-action@v1
         with:
-          config: p/default  # You can use other rulesets like p/owasp-top-ten, p/ci
-          generateSarif: true  # Generate SARIF output for GitHub Security tab
+          publishToken: ${{ secrets.SEMGREP_TOKEN }}
         env:
           # Set your Semgrep token as a secret in GitHub repository
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_TOKEN }}
-          # Continue even if vulnerabilities are found
           SEMGREP_TIMEOUT: 300
-          # Set to true to continue pipeline even with findings
-          SEMGREP_AUDIT_ON: true
-          # This is crucial - don't fail the job on findings
-          SEMGREP_BASELINE_REF: ""  # Optional: use this if you want to compare against a baseline
         continue-on-error: true  # This ensures the workflow doesn't fail when Semgrep finds issues
