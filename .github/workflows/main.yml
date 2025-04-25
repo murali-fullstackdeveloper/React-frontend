@@ -1,5 +1,70 @@
-name: Snyk Security Scan
+# name: Snyk Security Scan
 
+# on:
+#   push:
+#     branches: [ "main" ]
+#   pull_request:
+#     branches: [ "main" ]
+#   schedule:
+#     - cron: '0 0 * * 0'  # Run weekly on Sundays at midnight
+#   workflow_dispatch:  # Allow manual triggering
+
+# jobs:
+#   security_scan:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v3
+
+#       - name: Set up Node.js
+#         uses: actions/setup-node@v3
+#         with:
+#           node-version: '16'
+          
+#       - name: Install dependencies
+#         run: |
+#           if [ -f package.json ]; then
+#             npm install
+#           fi
+          
+#       # Run Snyk scan
+#       - name: Run Snyk to check for vulnerabilities
+#         continue-on-error: true  # Continue even if vulnerabilities found
+#         uses: snyk/actions/node@master
+#         env:
+#           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+#         with:
+#           args: --all-projects --detection-depth=999 --json-file-output=snyk-results.json
+          
+#       # Just count and display vulnerabilities in pipeline output
+#       - name: Count vulnerabilities
+#         if: always()
+#         run: |
+#           if [ -f snyk-results.json ]; then
+#             echo "FOUND VULNERABILITIES:"
+#             echo "======================="
+            
+#             high_count=$(grep -o '"severity":"high"' snyk-results.json | wc -l)
+#             medium_count=$(grep -o '"severity":"medium"' snyk-results.json | wc -l)
+#             low_count=$(grep -o '"severity":"low"' snyk-results.json | wc -l)
+#             total=$((high_count + medium_count + low_count))
+            
+#             echo "HIGH: $high_count"
+#             echo "MEDIUM: $medium_count"
+#             echo "LOW: $low_count"
+#             echo "TOTAL: $total"
+#           else
+#             echo "NO VULNERABILITIES FOUND OR SCAN FAILED"
+#           fi
+          
+#       # Save raw results file
+#       - name: Upload results
+#         if: always()
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: snyk-results
+#           path: snyk-results.json
+name: Enhanced Security Scan
 on:
   push:
     branches: [ "main" ]
@@ -15,52 +80,75 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
+        
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '16'
+          node-version: '18'  # Upgraded from 16 to meet package requirements
+          cache: 'npm'
           
       - name: Install dependencies
         run: |
           if [ -f package.json ]; then
-            npm install
+            npm ci  # More reliable than npm install for CI environments
           fi
+          
+      # Run npm audit in addition to Snyk
+      - name: Run npm audit
+        continue-on-error: true
+        run: |
+          npm audit --json > npm-audit-results.json || true
+          echo "NPM AUDIT RESULTS:"
+          echo "=================="
+          npm audit
           
       # Run Snyk scan
       - name: Run Snyk to check for vulnerabilities
-        continue-on-error: true  # Continue even if vulnerabilities found
+        continue-on-error: true
         uses: snyk/actions/node@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           args: --all-projects --detection-depth=999 --json-file-output=snyk-results.json
           
-      # Just count and display vulnerabilities in pipeline output
-      - name: Count vulnerabilities
+      # Process and display vulnerabilities in pipeline output
+      - name: Process vulnerability results
         if: always()
         run: |
+          echo "VULNERABILITY SUMMARY:"
+          echo "======================"
+          
           if [ -f snyk-results.json ]; then
-            echo "FOUND VULNERABILITIES:"
-            echo "======================="
-            
             high_count=$(grep -o '"severity":"high"' snyk-results.json | wc -l)
             medium_count=$(grep -o '"severity":"medium"' snyk-results.json | wc -l)
             low_count=$(grep -o '"severity":"low"' snyk-results.json | wc -l)
             total=$((high_count + medium_count + low_count))
             
-            echo "HIGH: $high_count"
-            echo "MEDIUM: $medium_count"
-            echo "LOW: $low_count"
-            echo "TOTAL: $total"
+            echo "SNYK FINDINGS:"
+            echo "  HIGH: $high_count"
+            echo "  MEDIUM: $medium_count"
+            echo "  LOW: $low_count"
+            echo "  TOTAL: $total"
           else
-            echo "NO VULNERABILITIES FOUND OR SCAN FAILED"
+            echo "  NO SNYK RESULTS FOUND OR SCAN FAILED"
           fi
           
-      # Save raw results file
+          # Exit with error if high severity vulnerabilities are found
+          if [ "$high_count" -gt 0 ]; then
+            echo "⚠️ High severity vulnerabilities detected!"
+            exit_code=1
+          else
+            exit_code=0
+          fi
+          
+          exit $exit_code
+          
+      # Save results files
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: snyk-results
-          path: snyk-results.json
+          name: security-scan-results
+          path: |
+            snyk-results.json
+            npm-audit-results.json
