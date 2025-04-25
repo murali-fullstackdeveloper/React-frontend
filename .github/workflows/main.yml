@@ -32,111 +32,93 @@ jobs:
         with:
           python-version: '3.10'
           
-      - name: Install Checkov and dependencies
+      - name: Install Checkov
+        run: pip install checkov
+      
+      # Remove any existing results directories to prevent issues
+      - name: Clean up any previous scan results
         run: |
-          pip install checkov jq
+          rm -rf scan-results
+          mkdir -p scan-results
       
       # Run Checkov scan against the entire repository
       - name: Run Checkov scan
         run: |
-          # Create directory for results
-          mkdir -p scan-results
-          
-          echo "Running Checkov scan on the entire repository"
-          # Run without directory restrictions to scan the entire repository
-          checkov --directory . --framework terraform --output cli --output json --output-file-path scan-results/results.json || true
+          # Run Checkov directly with output to a specific file (not a directory)
+          checkov --directory . --framework terraform --output cli --output-file-path ./scan-results/terraform-results.txt || true
           
           # Check if scan produced results
-          if [ -f scan-results/results.json ]; then
+          if [ -f ./scan-results/terraform-results.txt ]; then
             echo "Scan completed successfully"
-            echo "Summary of findings:"
-            jq -r '{"passed": .passed, "failed": .failed, "skipped": .skipped, "resource_count": .resource_count}' scan-results/results.json
+            echo "First few lines of findings:"
+            head -n 20 ./scan-results/terraform-results.txt
           else
-            echo "Scan did not produce a results file. Creating an empty one."
-            echo '{"passed": 0, "failed": 0, "skipped": 0, "parsing_errors": 0, "resource_count": 0, "checkov_version": "3.2.408"}' > scan-results/results.json
+            echo "Scan did not produce a results file."
+            echo "No Terraform files found or scan failed." > ./scan-results/terraform-results.txt
           fi
       
-      # Save results to workspace
-      - name: Create scan summary
-        run: |
-          echo "## Checkov Terraform Security Scan Results" > scan-results/summary.md
-          echo "Scan completed at $(date)" >> scan-results/summary.md
-          
-          # Check if file exists and is a file (not a directory)
-          if [ -f scan-results/results.json ]; then
-            echo "Processing results from scan-results/results.json"
-            
-            # Extract counts
-            PASSED=$(jq -r '.passed // 0' scan-results/results.json)
-            FAILED=$(jq -r '.failed // 0' scan-results/results.json)
-            SKIPPED=$(jq -r '.skipped // 0' scan-results/results.json)
-            RESOURCES=$(jq -r '.resource_count // 0' scan-results/results.json)
-            TOTAL=$((PASSED + FAILED + SKIPPED))
-            
-            echo "- **Total resources:** $RESOURCES" >> scan-results/summary.md
-            echo "- **Total checks:** $TOTAL" >> scan-results/summary.md
-            echo "- **Passed checks:** $PASSED" >> scan-results/summary.md
-            echo "- **Failed checks:** $FAILED" >> scan-results/summary.md
-            echo "- **Skipped checks:** $SKIPPED" >> scan-results/summary.md
-            
-            # Extract and list failed checks if any
-            if [ $FAILED -gt 0 ] && jq -e '.results' scan-results/results.json > /dev/null 2>&1; then
-              echo "### Failed Security Checks:" >> scan-results/summary.md
-              jq -r '.results[] | select(.check_result == "FAILED") | "- **" + .check_id + "**: " + .check_name + " in " + .file_path' scan-results/results.json >> scan-results/summary.md 2>/dev/null || echo "- Error extracting detailed results" >> scan-results/summary.md
-            fi
-          else
-            echo "- **No Terraform files found or no results generated**" >> scan-results/summary.md
-            echo "- Make sure your repository contains Terraform (*.tf, *.tfvars) files" >> scan-results/summary.md
-          fi
-          
-          cat scan-results/summary.md
-      
-      # Run a special full scan with all frameworks just to be safe
+      # Run a full scan with all frameworks
       - name: Run comprehensive scan
         run: |
-          echo "Running comprehensive scan with all supported frameworks"
+          checkov --directory . --output cli --output-file-path ./scan-results/full-results.txt || true
           
-          # Run checkov with all frameworks to catch everything
-          checkov --directory . --output cli --output json --output-file-path scan-results/full-results.json || true
-          
-          if [ -f scan-results/full-results.json ]; then
+          if [ -f ./scan-results/full-results.txt ]; then
             echo "Comprehensive scan completed successfully"
-            echo "Summary of comprehensive findings:"
-            jq -r '{"passed": .passed, "failed": .failed, "skipped": .skipped, "resource_count": .resource_count}' scan-results/full-results.json
-            
-            # Add to summary
-            echo "## Comprehensive Scan Results (All IaC)" >> scan-results/summary.md
-            PASSED=$(jq -r '.passed // 0' scan-results/full-results.json)
-            FAILED=$(jq -r '.failed // 0' scan-results/full-results.json)
-            RESOURCES=$(jq -r '.resource_count // 0' scan-results/full-results.json)
-            
-            echo "- **Total resources:** $RESOURCES" >> scan-results/summary.md
-            echo "- **Passed checks:** $PASSED" >> scan-results/summary.md  
-            echo "- **Failed checks:** $FAILED" >> scan-results/summary.md
-            
-            cat scan-results/summary.md
+            echo "First few lines of findings:"
+            head -n 20 ./scan-results/full-results.txt
           else
             echo "Comprehensive scan did not produce results"
+            echo "No IaC files found or scan failed." > ./scan-results/full-results.txt
           fi
+      
+      # Create a readable summary
+      - name: Create scan summary
+        run: |
+          echo "## Checkov Security Scan Results" > ./scan-results/summary.md
+          echo "Scan completed at $(date)" >> ./scan-results/summary.md
+          echo "" >> ./scan-results/summary.md
+          
+          echo "### Terraform Scan Results" >> ./scan-results/summary.md
+          
+          if grep -q "Failed checks: [1-9]" ./scan-results/terraform-results.txt; then
+            # Extract basic stats
+            CHECKS_SUMMARY=$(grep -A 3 "Check Results Summary" ./scan-results/terraform-results.txt || echo "No summary found")
+            echo "```" >> ./scan-results/summary.md
+            echo "$CHECKS_SUMMARY" >> ./scan-results/summary.md
+            echo "```" >> ./scan-results/summary.md
+            
+            # Extract failed checks
+            echo "#### Failed Checks:" >> ./scan-results/summary.md
+            grep -A 2 "Check: " ./scan-results/terraform-results.txt | grep -v "PASSED" >> ./scan-results/summary.md
+          else
+            echo "No failed checks found in Terraform files, or no Terraform files found." >> ./scan-results/summary.md
+          fi
+          
+          echo "" >> ./scan-results/summary.md
+          echo "### Comprehensive Scan Results (All IaC)" >> ./scan-results/summary.md
+          
+          if grep -q "Failed checks: [1-9]" ./scan-results/full-results.txt; then
+            # Extract basic stats
+            CHECKS_SUMMARY=$(grep -A 3 "Check Results Summary" ./scan-results/full-results.txt || echo "No summary found")
+            echo "```" >> ./scan-results/summary.md
+            echo "$CHECKS_SUMMARY" >> ./scan-results/summary.md
+            echo "```" >> ./scan-results/summary.md
+            
+            # Extract failed checks
+            echo "#### Failed Checks:" >> ./scan-results/summary.md
+            grep -A 2 "Check: " ./scan-results/full-results.txt | grep -v "PASSED" >> ./scan-results/summary.md
+          else
+            echo "No failed checks found in any IaC files, or no IaC files found." >> ./scan-results/summary.md
+          fi
+          
+          cat ./scan-results/summary.md
       
       # Report findings but don't fail the pipeline
       - name: Report security issues
         run: |
-          HIGH_SEVERITY_TF=0
-          HIGH_SEVERITY_ALL=0
-          
-          if [ -f scan-results/results.json ]; then
-            HIGH_SEVERITY_TF=$(jq -r '.results[] | select(.check_result == "FAILED" and .severity == "HIGH") | .check_id' scan-results/results.json 2>/dev/null | wc -l || echo 0)
-          fi
-          
-          if [ -f scan-results/full-results.json ]; then
-            HIGH_SEVERITY_ALL=$(jq -r '.results[] | select(.check_result == "FAILED" and .severity == "HIGH") | .check_id' scan-results/full-results.json 2>/dev/null | wc -l || echo 0)
-          fi
-            
-          if [ "$HIGH_SEVERITY_TF" -gt 0 ] || [ "$HIGH_SEVERITY_ALL" -gt 0 ]; then
-            echo "Warning: High severity security issues found in the codebase, but continuing build."
-            echo "- Terraform-specific high severity issues: $HIGH_SEVERITY_TF"
-            echo "- Total high severity issues (all IaC): $HIGH_SEVERITY_ALL"
+          if grep -q "HIGH" ./scan-results/terraform-results.txt || grep -q "HIGH" ./scan-results/full-results.txt; then
+            echo "Warning: HIGH severity security issues found in the codebase, but continuing build."
+            echo "See scan results for details."
           else
             echo "No high severity issues found."
           fi
