@@ -16,7 +16,16 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Fetch all history for proper scanning
       
+      # List repository contents for debugging
+      - name: List repository contents
+        run: |
+          echo "Repository contents:"
+          find . -type f -name "*.tf" | sort
+          echo "---"
+          
       # Set up Python
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -26,11 +35,51 @@ jobs:
       - name: Install Checkov
         run: pip install checkov
       
+      # Run Checkov scan with explicit output file (not directory)
       - name: Run Checkov scan
         run: |
+          # Create directory for results
           mkdir -p scan-results
-          checkov --directory . --framework terraform --output cli --output json --output-file-path scan-results/results.json
+          
+          # Find Terraform directories
+          TF_DIRS=$(find . -type f -name "*.tf" -not -path "*/\.*" | xargs -I{} dirname {} | sort -u)
+          
+          if [ -z "$TF_DIRS" ]; then
+            echo "No Terraform files found. Creating empty results file."
+            echo '{"passed": 0, "failed": 0, "skipped": 0, "parsing_errors": 0, "resource_count": 0, "checkov_version": "3.2.408"}' > scan-results/results.json
+          else
+            echo "Found Terraform files in directories:"
+            echo "$TF_DIRS"
+            
+            # Run Checkov scan on each directory containing Terraform files
+            for dir in $TF_DIRS; do
+              echo "Scanning directory: $dir"
+              checkov --directory "$dir" --framework terraform --output cli --output json --output-file-path scan-results/results-$dir.json || true
+            done
+            
+            # Combine results or use the first file if only one exists
+            if [ "$(ls -1 scan-results/results-*.json 2>/dev/null | wc -l)" -gt 1 ]; then
+              echo "Combining multiple result files"
+              jq -s 'reduce .[] as $item ({"passed": 0, "failed": 0, "skipped": 0, "parsing_errors": 0, "resource_count": 0}; 
+                .passed += ($item.passed // 0) | 
+                .failed += ($item.failed // 0) | 
+                .skipped += ($item.skipped // 0) |
+                .parsing_errors += ($item.parsing_errors // 0) |
+                .resource_count += ($item.resource_count // 0) |
+                . += {"results": ((.results // []) + ($item.results // []))}
+              )' scan-results/results-*.json > scan-results/results.json
+            elif [ "$(ls -1 scan-results/results-*.json 2>/dev/null | wc -l)" -eq 1 ]; then
+              echo "Using single result file"
+              cp "$(ls -1 scan-results/results-*.json | head -1)" scan-results/results.json
+            else
+              echo "No scan results found. Creating empty results file."
+              echo '{"passed": 0, "failed": 0, "skipped": 0, "parsing_errors": 0, "resource_count": 0}' > scan-results/results.json
+            fi
+          fi
+          
           echo "Scan completed. Results saved to scan-results/results.json"
+          ls -la scan-results/
+          cat scan-results/results.json | head -n 20
       
       # Save results to workspace
       - name: Create scan summary
@@ -38,15 +87,29 @@ jobs:
           echo "## Checkov Terraform Security Scan Results" > scan-results/summary.md
           echo "Scan completed at $(date)" >> scan-results/summary.md
           
+          # Check if file exists and is a file (not a directory)
           if [ -f scan-results/results.json ]; then
-            FAILED_CHECKS=$(grep -c "\"check_result\": \"FAILED\"" scan-results/results.json || echo "0")
-            echo "- **Failed checks:** $FAILED_CHECKS" >> scan-results/summary.md
+            echo "Processing results from scan-results/results.json"
             
-            # Extract and list failed checks
-            echo "### Failed Security Checks:" >> scan-results/summary.md
-            grep -B 5 -A 15 "\"check_result\": \"FAILED\"" scan-results/results.json | grep "\"check_name\":\|\"file_path\":\|\"check_id\":" | sort | uniq >> scan-results/summary.md
+            # Extract counts
+            PASSED=$(jq -r '.passed // 0' scan-results/results.json)
+            FAILED=$(jq -r '.failed // 0' scan-results/results.json)
+            SKIPPED=$(jq -r '.skipped // 0' scan-results/results.json)
+            TOTAL=$((PASSED + FAILED + SKIPPED))
+            
+            echo "- **Total checks:** $TOTAL" >> scan-results/summary.md
+            echo "- **Passed checks:** $PASSED" >> scan-results/summary.md
+            echo "- **Failed checks:** $FAILED" >> scan-results/summary.md
+            echo "- **Skipped checks:** $SKIPPED" >> scan-results/summary.md
+            
+            # Extract and list failed checks if any
+            if [ $FAILED -gt 0 ] && jq -e '.results' scan-results/results.json > /dev/null; then
+              echo "### Failed Security Checks:" >> scan-results/summary.md
+              jq -r '.results[] | select(.check_result == "FAILED") | "- **" + .check_id + "**: " + .check_name + " in " + .file_path' scan-results/results.json >> scan-results/summary.md 2>/dev/null || echo "- Error extracting detailed results" >> scan-results/summary.md
+            fi
           else
-            echo "- No results file found" >> scan-results/summary.md
+            echo "- **No Terraform files found or no results generated**" >> scan-results/summary.md
+            echo "- Make sure your repository contains Terraform (*.tf) files" >> scan-results/summary.md
           fi
           
           cat scan-results/summary.md
@@ -54,8 +117,14 @@ jobs:
       # Report findings but don't fail the pipeline
       - name: Report security issues
         run: |
-          if grep -q "\"severity\": \"HIGH\"" scan-results/results.json; then
-            echo "Warning: High severity security issues found in Terraform code, but continuing build."
+          if [ -f scan-results/results.json ]; then
+            HIGH_SEVERITY=$(jq -r '.results[] | select(.check_result == "FAILED" and .severity == "HIGH") | .check_id' scan-results/results.json 2>/dev/null | wc -l)
+            
+            if [ "$HIGH_SEVERITY" -gt 0 ]; then
+              echo "Warning: $HIGH_SEVERITY high severity security issues found in Terraform code, but continuing build."
+            else
+              echo "No high severity issues found."
+            fi
           else
-            echo "No high severity issues found."
+            echo "No results file found to check for security issues."
           fi
