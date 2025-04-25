@@ -1,0 +1,204 @@
+name: Security Scan
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+  - cron: '0 0 * * 0' # Run weekly on Sundays at midnight
+  workflow_dispatch:
+    # Allow manual triggering
+
+jobs:
+  security_scan:
+    name: Dependency Security Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # For GitHub Security tab integration
+    continue-on-error: true
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18' # Use Node.js 18 to avoid compatibility warnings
+        cache: 'npm'
+
+    - name: Install dependencies
+      id: install
+      continue-on-error: true
+      run: |
+        if [ -f package.json ]; then
+          # Capture npm install output
+          npm_output=$(npm ci 2>&1 || npm install 2>&1)
+          echo "$npm_output"
+          
+          # Extract vulnerability counts from npm install output
+          if echo "$npm_output" | grep -q "vulnerabilities"; then
+            vuln_line=$(echo "$npm_output" | grep "vulnerabilities")
+            echo "INSTALL VULNERABILITIES: $vuln_line"
+            
+            # Extract the vulnerability counts using regex
+            high_count=$(echo "$vuln_line" | grep -o '[0-9]\+ high' | grep -o '[0-9]\+' || echo "0")
+            medium_count=$(echo "$vuln_line" | grep -o '[0-9]\+ moderate' | grep -o '[0-9]\+' || echo "0")
+            low_count=$(echo "$vuln_line" | grep -o '[0-9]\+ low' | grep -o '[0-9]\+' || echo "0")
+            
+            # Set outputs for later use
+            echo "npm_high=$high_count" >> $GITHUB_OUTPUT
+            echo "npm_medium=$medium_count" >> $GITHUB_OUTPUT
+            echo "npm_low=$low_count" >> $GITHUB_OUTPUT
+            total=$((high_count + medium_count + low_count))
+            echo "npm_total=$total" >> $GITHUB_OUTPUT
+          else
+            echo "npm_high=0" >> $GITHUB_OUTPUT
+            echo "npm_medium=0" >> $GITHUB_OUTPUT
+            echo "npm_low=0" >> $GITHUB_OUTPUT
+            echo "npm_total=0" >> $GITHUB_OUTPUT
+          fi
+        fi
+
+    # Run detailed npm audit for more information
+    - name: Run npm audit
+      id: npm-audit
+      continue-on-error: true
+      run: |
+        echo "::group::NPM AUDIT DETAILED RESULTS"
+        npm audit || true
+        echo "::endgroup::"
+
+        # Generate JSON results
+        npm audit --json > npm-audit-results.json || true
+
+        # List packages with vulnerabilities
+        echo "VULNERABLE PACKAGES:"
+        echo "===================="
+        grep -o '"name":"[^"]*"' npm-audit-results.json | sort | uniq | cut -d'"' -f4 || echo "None found"
+
+        # Use the values from the install step
+        echo "==== NPM VULNERABILITIES SUMMARY ===="
+        echo "HIGH: ${{ steps.install.outputs.npm_high }}"
+        echo "MEDIUM: ${{ steps.install.outputs.npm_medium }}"
+        echo "LOW: ${{ steps.install.outputs.npm_low }}"
+        echo "TOTAL: ${{ steps.install.outputs.npm_total }}"
+
+    # Run Snyk scan
+    - name: Run Snyk to check for vulnerabilities
+      id: snyk-scan
+      continue-on-error: true
+      uses: snyk/actions/node@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --all-projects --detection-depth=999 --json-file-output=snyk-results.json
+
+    # Process Snyk results
+    - name: Process Snyk results
+      id: process-snyk
+      if: always()
+      continue-on-error: true
+      run: |
+        if [ -f snyk-results.json ]; then
+          # Count vulnerabilities by severity
+          high_count=$(grep -o '"severity":"high"' snyk-results.json | wc -l)
+          medium_count=$(grep -o '"severity":"medium"' snyk-results.json | wc -l)
+          low_count=$(grep -o '"severity":"low"' snyk-results.json | wc -l)
+          total=$((high_count + medium_count + low_count))
+          
+          # Store counts as outputs
+          echo "snyk_high=$high_count" >> $GITHUB_OUTPUT
+          echo "snyk_medium=$medium_count" >> $GITHUB_OUTPUT
+          echo "snyk_low=$low_count" >> $GITHUB_OUTPUT
+          echo "snyk_total=$total" >> $GITHUB_OUTPUT
+          
+          echo "==== SNYK SCAN SUMMARY ===="
+          echo "HIGH: $high_count"
+          echo "MEDIUM: $medium_count"
+          echo "LOW: $low_count"
+          echo "TOTAL: $total"
+        else
+          echo "NO SNYK RESULTS FOUND OR SCAN FAILED"
+          echo "snyk_high=0" >> $GITHUB_OUTPUT
+          echo "snyk_medium=0" >> $GITHUB_OUTPUT
+          echo "snyk_low=0" >> $GITHUB_OUTPUT
+          echo "snyk_total=0" >> $GITHUB_OUTPUT
+        fi
+
+    # Create a combined summary and decide on pass/fail
+    - name: Combine vulnerability results
+      id: combine-results
+      if: always()
+      continue-on-error: true
+      run: |
+        # Create a summary in markdown format for the job summary
+        echo "# Security Scan Results" > $GITHUB_STEP_SUMMARY
+
+        echo "## NPM Install Detected Vulnerabilities" >> $GITHUB_STEP_SUMMARY
+        echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+        echo "| -------- | ----- |" >> $GITHUB_STEP_SUMMARY
+        echo "| HIGH | ${{ steps.install.outputs.npm_high || 0 }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| MEDIUM | ${{ steps.install.outputs.npm_medium || 0 }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| LOW | ${{ steps.install.outputs.npm_low || 0 }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| **TOTAL** | **${{ steps.install.outputs.npm_total || 0 }}** |" >> $GITHUB_STEP_SUMMARY
+
+        echo "## Snyk Scan Results" >> $GITHUB_STEP_SUMMARY
+        echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+        echo "| -------- | ----- |" >> $GITHUB_STEP_SUMMARY
+        echo "| HIGH | ${{ steps.process-snyk.outputs.snyk_high || 0 }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| MEDIUM | ${{ steps.process-snyk.outputs.snyk_medium || 0 }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| LOW | ${{ steps.process-snyk.outputs.snyk_low || 0 }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| **TOTAL** | **${{ steps.process-snyk.outputs.snyk_total || 0 }}** |" >> $GITHUB_STEP_SUMMARY
+
+        # Print clear separation between the two tools
+        echo "================================================"
+        echo "           SECURITY SCAN COMPARISON              "
+        echo "================================================"
+        echo "NPM INSTALL: ${{ steps.install.outputs.npm_total || 0 }} vulnerabilities"
+        echo "  HIGH: ${{ steps.install.outputs.npm_high || 0 }}"
+        echo "  MEDIUM: ${{ steps.install.outputs.npm_medium || 0 }}"
+        echo "  LOW: ${{ steps.install.outputs.npm_low || 0 }}"
+        echo ""
+        echo "SNYK SCAN: ${{ steps.process-snyk.outputs.snyk_total || 0 }} vulnerabilities"
+        echo "  HIGH: ${{ steps.process-snyk.outputs.snyk_high || 0 }}"
+        echo "  MEDIUM: ${{ steps.process-snyk.outputs.snyk_medium || 0 }}"
+        echo "  LOW: ${{ steps.process-snyk.outputs.snyk_low || 0 }}"
+        echo "================================================"
+
+        # Determine if vulnerabilities were found, but don't fail
+        npm_high=${{ steps.install.outputs.npm_high || 0 }}
+        snyk_high=${{ steps.process-snyk.outputs.snyk_high || 0 }}
+
+        if [ "$npm_high" -gt 0 ] || [ "$snyk_high" -gt 0 ]; then
+          echo "High severity vulnerabilities detected! (Pipeline will continue)"
+          echo "fail=true" >> $GITHUB_OUTPUT
+        else
+          echo "No high severity vulnerabilities detected."
+          echo "fail=false" >> $GITHUB_OUTPUT
+        fi
+
+    # Fix vulnerabilities automatically when manually triggered
+    - name: Attempt to fix vulnerabilities
+      if: ${{ github.event_name == 'workflow_dispatch' && steps.combine-results.outputs.fail == 'true' }}
+      continue-on-error: true
+      run: |
+        echo "Attempting to fix vulnerabilities automatically..."
+        npm audit fix || true
+
+        echo "After npm audit fix:"
+        npm audit || true
+
+        echo "Note: Some vulnerabilities may require manual fixes or dependency updates."
+
+    # Save results files
+    - name: Upload scan results
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-scan-results
+        path: |
+          snyk-results.json
+          npm-audit-results.json
