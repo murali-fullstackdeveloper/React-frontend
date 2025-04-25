@@ -1,51 +1,61 @@
-name: Semgrep Security Scan
+# GitHub Actions workflow for Terraform vulnerability scanning with Checkov
+name: Terraform Security Scan
+
 on:
+  # Run on every push to any branch
+  push:
+  # Run on pull requests to main/master branches
   pull_request:
     branches: [ main, master ]
-  push:
-    branches: [ main, master ]
-  schedule:
-    - cron: '0 0 * * 0'  # Run weekly on Sundays
 
 jobs:
-  semgrep-scan:
-    name: Semgrep Security Scan
+  checkov-scan:
+    name: Checkov Terraform Security Scan
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+      
+      # Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          fetch-depth: 0  # Fetch all history for all branches and tags
+          python-version: '3.10'
+          
+      - name: Install Checkov
+        run: pip install checkov
       
-      - name: Install Semgrep
-        run: pip3 install semgrep
-      
-      - name: Run Semgrep Scan
+      - name: Run Checkov scan
         run: |
-          semgrep ci --verbose
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_TOKEN }}
-        continue-on-error: true  # This ensures the workflow doesn't fail when Semgrep finds issues
+          mkdir -p scan-results
+          checkov --directory . --framework terraform --output cli --output json --output-file-path scan-results/results.json
+          echo "Scan completed. Results saved to scan-results/results.json"
       
-      - name: Run Semgrep Local Scan (Fallback)
-        if: ${{ failure() }}
+      # Save results to workspace
+      - name: Create scan summary
         run: |
-          semgrep --config=auto --output=semgrep-results.json --json .
-        continue-on-error: true
-      
-      - name: Display Findings Summary
-        if: always()
-        run: |
-          if [ -f semgrep-results.json ]; then
-            echo "Semgrep findings summary from local scan:"
-            cat semgrep-results.json | jq '.results | length' | xargs -I{} echo "Total findings: {}"
+          echo "## Checkov Terraform Security Scan Results" > scan-results/summary.md
+          echo "Scan completed at $(date)" >> scan-results/summary.md
+          
+          if [ -f scan-results/results.json ]; then
+            FAILED_CHECKS=$(grep -c "\"check_result\": \"FAILED\"" scan-results/results.json || echo "0")
+            echo "- **Failed checks:** $FAILED_CHECKS" >> scan-results/summary.md
+            
+            # Extract and list failed checks
+            echo "### Failed Security Checks:" >> scan-results/summary.md
+            grep -B 5 -A 15 "\"check_result\": \"FAILED\"" scan-results/results.json | grep "\"check_name\":\|\"file_path\":\|\"check_id\":" | sort | uniq >> scan-results/summary.md
           else
-            echo "No local Semgrep results file found"
+            echo "- No results file found" >> scan-results/summary.md
           fi
+          
+          cat scan-results/summary.md
       
-      - name: Save Results to Job Summary
-        if: always()
+      # Report findings but don't fail the pipeline
+      - name: Report security issues
         run: |
-          echo "## Semgrep Security Scan Results" >> $GITHUB_STEP_SUMMARY
-          echo "Scan completed. Check the logs for details on any findings." >> $GITHUB_STEP_SUMMARY
+          if grep -q "\"severity\": \"HIGH\"" scan-results/results.json; then
+            echo "Warning: High severity security issues found in Terraform code, but continuing build."
+          else
+            echo "No high severity issues found."
+          fi
