@@ -1,318 +1,4 @@
-# # # # name: Snyk Security Scan
-
-# # # # on:
-# # # #   push:
-# # # #     branches: [ "main" ]
-# # # #   pull_request:
-# # # #     branches: [ "main" ]
-# # # #   schedule:
-# # # #     - cron: '0 0 * * 0'  # Run weekly on Sundays at midnight
-# # # #   workflow_dispatch:  # Allow manual triggering
-
-# # # # jobs:
-# # # #   security_scan:
-# # # #     runs-on: ubuntu-latest
-# # # #     steps:
-# # # #       - name: Checkout code
-# # # #         uses: actions/checkout@v3
-
-# # # #       - name: Set up Node.js
-# # # #         uses: actions/setup-node@v3
-# # # #         with:
-# # # #           node-version: '16'
-          
-# # # #       - name: Install dependencies
-# # # #         run: |
-# # # #           if [ -f package.json ]; then
-# # # #             npm install
-# # # #           fi
-          
-# # # #       # Run Snyk scan
-# # # #       - name: Run Snyk to check for vulnerabilities
-# # # #         continue-on-error: true  # Continue even if vulnerabilities found
-# # # #         uses: snyk/actions/node@master
-# # # #         env:
-# # # #           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-# # # #         with:
-# # # #           args: --all-projects --detection-depth=999 --json-file-output=snyk-results.json
-          
-# # # #       # Just count and display vulnerabilities in pipeline output
-# # # #       - name: Count vulnerabilities
-# # # #         if: always()
-# # # #         run: |
-# # # #           if [ -f snyk-results.json ]; then
-# # # #             echo "FOUND VULNERABILITIES:"
-# # # #             echo "======================="
-            
-# # # #             high_count=$(grep -o '"severity":"high"' snyk-results.json | wc -l)
-# # # #             medium_count=$(grep -o '"severity":"medium"' snyk-results.json | wc -l)
-# # # #             low_count=$(grep -o '"severity":"low"' snyk-results.json | wc -l)
-# # # #             total=$((high_count + medium_count + low_count))
-            
-# # # #             echo "HIGH: $high_count"
-# # # #             echo "MEDIUM: $medium_count"
-# # # #             echo "LOW: $low_count"
-# # # #             echo "TOTAL: $total"
-# # # #           else
-# # # #             echo "NO VULNERABILITIES FOUND OR SCAN FAILED"
-# # # #           fi
-          
-# # # #       # Save raw results file
-# # # #       - name: Upload results
-# # # #         if: always()
-# # # #         uses: actions/upload-artifact@v4
-# # # #         with:
-# # # #           name: snyk-results
-# # # #           path: snyk-results.json
-# # # name: Enhanced Security Scan
-# # # on:
-# # #   push:
-# # #     branches: [ "main" ]
-# # #   pull_request:
-# # #     branches: [ "main" ]
-# # #   schedule:
-# # #     - cron: '0 0 * * 0'  # Run weekly on Sundays at midnight
-# # #   workflow_dispatch:  # Allow manual triggering
-
-# # # jobs:
-# # #   security_scan:
-# # #     runs-on: ubuntu-latest
-# # #     steps:
-# # #       - name: Checkout code
-# # #         uses: actions/checkout@v3
-        
-# # #       - name: Set up Node.js
-# # #         uses: actions/setup-node@v3
-# # #         with:
-# # #           node-version: '18'  # Upgraded from 16 to meet package requirements
-# # #           cache: 'npm'
-          
-# # #       - name: Install dependencies
-# # #         run: |
-# # #           if [ -f package.json ]; then
-# # #             npm ci  # More reliable than npm install for CI environments
-# # #           fi
-          
-# # #       # Run npm audit in addition to Snyk
-# # #       - name: Run npm audit
-# # #         continue-on-error: true
-# # #         run: |
-# # #           npm audit --json > npm-audit-results.json || true
-# # #           echo "NPM AUDIT RESULTS:"
-# # #           echo "=================="
-# # #           npm audit
-          
-# # #       # Run Snyk scan
-# # #       - name: Run Snyk to check for vulnerabilities
-# # #         continue-on-error: true
-# # #         uses: snyk/actions/node@master
-# # #         env:
-# # #           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-# # #         with:
-# # #           args: --all-projects --detection-depth=999 --json-file-output=snyk-results.json
-          
-# # #       # Process and display vulnerabilities in pipeline output
-# # #       - name: Process vulnerability results
-# # #         if: always()
-# # #         run: |
-# # #           echo "VULNERABILITY SUMMARY:"
-# # #           echo "======================"
-          
-# # #           if [ -f snyk-results.json ]; then
-# # #             high_count=$(grep -o '"severity":"high"' snyk-results.json | wc -l)
-# # #             medium_count=$(grep -o '"severity":"medium"' snyk-results.json | wc -l)
-# # #             low_count=$(grep -o '"severity":"low"' snyk-results.json | wc -l)
-# # #             total=$((high_count + medium_count + low_count))
-            
-# # #             echo "SNYK FINDINGS:"
-# # #             echo "  HIGH: $high_count"
-# # #             echo "  MEDIUM: $medium_count"
-# # #             echo "  LOW: $low_count"
-# # #             echo "  TOTAL: $total"
-# # #           else
-# # #             echo "  NO SNYK RESULTS FOUND OR SCAN FAILED"
-# # #           fi
-          
-# # #           # Exit with error if high severity vulnerabilities are found
-# # #           if [ "$high_count" -gt 0 ]; then
-# # #             echo "⚠️ High severity vulnerabilities detected!"
-# # #             exit_code=1
-# # #           else
-# # #             exit_code=0
-# # #           fi
-          
-# # #           exit $exit_code
-          
-# # #       # Save results files
-# # #       - name: Upload results
-# # #         if: always()
-# # #         uses: actions/upload-artifact@v4
-# # #         with:
-# # #           name: security-scan-results
-# # #           path: |
-# # #             snyk-results.json
-# # #             npm-audit-results.json
-# # name: Enhanced Security Scan
-# # on:
-# #   push:
-# #     branches: [ "main" ]
-# #   pull_request:
-# #     branches: [ "main" ]
-# #   schedule:
-# #     - cron: '0 0 * * 0'  # Run weekly on Sundays at midnight
-# #   workflow_dispatch:  # Allow manual triggering
-
-# # jobs:
-# #   security_scan:
-# #     runs-on: ubuntu-latest
-# #     steps:
-# #       - name: Checkout code
-# #         uses: actions/checkout@v3
-        
-# #       - name: Set up Node.js
-# #         uses: actions/setup-node@v3
-# #         with:
-# #           node-version: '18'  # Upgraded from 16 to meet package requirements
-# #           cache: 'npm'
-          
-# #       - name: Install dependencies
-# #         run: |
-# #           if [ -f package.json ]; then
-# #             npm ci || npm install  # Try npm ci first, fall back to npm install
-# #           fi
-
-# #       # ===== NPM AUDIT SECTION =====
-# #       - name: Run npm audit
-# #         id: npm-audit
-# #         continue-on-error: true
-# #         run: |
-# #           echo "::group::NPM AUDIT DETAILED RESULTS"
-# #           npm audit || true
-# #           echo "::endgroup::"
-          
-# #           # Create JSON output and count vulnerabilities
-# #           npm audit --json > npm-audit-results.json || true
-          
-# #           # Count vulnerabilities by severity
-# #           high_count=$(grep -o '"severity":"high"' npm-audit-results.json | wc -l)
-# #           medium_count=$(grep -o '"severity":"moderate"' npm-audit-results.json | wc -l)
-# #           low_count=$(grep -o '"severity":"low"' npm-audit-results.json | wc -l)
-# #           total=$((high_count + medium_count + low_count))
-          
-# #           # Store counts as outputs
-# #           echo "npm_high=$high_count" >> $GITHUB_OUTPUT
-# #           echo "npm_medium=$medium_count" >> $GITHUB_OUTPUT
-# #           echo "npm_low=$low_count" >> $GITHUB_OUTPUT
-# #           echo "npm_total=$total" >> $GITHUB_OUTPUT
-          
-# #           echo "==== NPM AUDIT SUMMARY ===="
-# #           echo "HIGH: $high_count"
-# #           echo "MEDIUM: $medium_count"
-# #           echo "LOW: $low_count"
-# #           echo "TOTAL: $total"
-
-# #       # ===== SNYK SCAN SECTION =====
-# #       - name: Run Snyk to check for vulnerabilities
-# #         id: snyk-scan
-# #         continue-on-error: true
-# #         uses: snyk/actions/node@master
-# #         env:
-# #           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-# #         with:
-# #           args: --all-projects --detection-depth=999 --json-file-output=snyk-results.json
-          
-# #       - name: Process Snyk results
-# #         id: process-snyk
-# #         if: always()
-# #         run: |
-# #           if [ -f snyk-results.json ]; then
-# #             # Count vulnerabilities by severity
-# #             high_count=$(grep -o '"severity":"high"' snyk-results.json | wc -l)
-# #             medium_count=$(grep -o '"severity":"medium"' snyk-results.json | wc -l)
-# #             low_count=$(grep -o '"severity":"low"' snyk-results.json | wc -l)
-# #             total=$((high_count + medium_count + low_count))
-            
-# #             # Store counts as outputs
-# #             echo "snyk_high=$high_count" >> $GITHUB_OUTPUT
-# #             echo "snyk_medium=$medium_count" >> $GITHUB_OUTPUT
-# #             echo "snyk_low=$low_count" >> $GITHUB_OUTPUT
-# #             echo "snyk_total=$total" >> $GITHUB_OUTPUT
-            
-# #             echo "==== SNYK SCAN SUMMARY ===="
-# #             echo "HIGH: $high_count"
-# #             echo "MEDIUM: $medium_count"
-# #             echo "LOW: $low_count"
-# #             echo "TOTAL: $total"
-# #           else
-# #             echo "NO SNYK RESULTS FOUND OR SCAN FAILED"
-# #             echo "snyk_high=0" >> $GITHUB_OUTPUT
-# #             echo "snyk_medium=0" >> $GITHUB_OUTPUT
-# #             echo "snyk_low=0" >> $GITHUB_OUTPUT
-# #             echo "snyk_total=0" >> $GITHUB_OUTPUT
-# #           fi
-
-# #       # ===== COMBINED RESULTS SECTION =====
-# #       - name: Combine vulnerability results
-# #         if: always()
-# #         run: |
-# #           # Create a summary in markdown format for the job summary
-# #           echo "# Security Scan Results" > $GITHUB_STEP_SUMMARY
-          
-# #           echo "## NPM Audit Results" >> $GITHUB_STEP_SUMMARY
-# #           echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
-# #           echo "| -------- | ----- |" >> $GITHUB_STEP_SUMMARY
-# #           echo "| HIGH | ${{ steps.npm-audit.outputs.npm_high }} |" >> $GITHUB_STEP_SUMMARY
-# #           echo "| MEDIUM | ${{ steps.npm-audit.outputs.npm_medium }} |" >> $GITHUB_STEP_SUMMARY
-# #           echo "| LOW | ${{ steps.npm-audit.outputs.npm_low }} |" >> $GITHUB_STEP_SUMMARY
-# #           echo "| **TOTAL** | **${{ steps.npm-audit.outputs.npm_total }}** |" >> $GITHUB_STEP_SUMMARY
-          
-# #           echo "## Snyk Scan Results" >> $GITHUB_STEP_SUMMARY
-# #           echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
-# #           echo "| -------- | ----- |" >> $GITHUB_STEP_SUMMARY
-# #           echo "| HIGH | ${{ steps.process-snyk.outputs.snyk_high }} |" >> $GITHUB_STEP_SUMMARY
-# #           echo "| MEDIUM | ${{ steps.process-snyk.outputs.snyk_medium }} |" >> $GITHUB_STEP_SUMMARY
-# #           echo "| LOW | ${{ steps.process-snyk.outputs.snyk_low }} |" >> $GITHUB_STEP_SUMMARY
-# #           echo "| **TOTAL** | **${{ steps.process-snyk.outputs.snyk_total }}** |" >> $GITHUB_STEP_SUMMARY
-          
-# #           # Print clear separation between the two tools
-# #           echo "================================================"
-# #           echo "           SECURITY SCAN COMPARISON              "
-# #           echo "================================================"
-# #           echo "NPM AUDIT: ${{ steps.npm-audit.outputs.npm_total }} vulnerabilities"
-# #           echo "  HIGH: ${{ steps.npm-audit.outputs.npm_high }}"
-# #           echo "  MEDIUM: ${{ steps.npm-audit.outputs.npm_medium }}"
-# #           echo "  LOW: ${{ steps.npm-audit.outputs.npm_low }}"
-# #           echo ""
-# #           echo "SNYK SCAN: ${{ steps.process-snyk.outputs.snyk_total }} vulnerabilities"
-# #           echo "  HIGH: ${{ steps.process-snyk.outputs.snyk_high }}"
-# #           echo "  MEDIUM: ${{ steps.process-snyk.outputs.snyk_medium }}"
-# #           echo "  LOW: ${{ steps.process-snyk.outputs.snyk_low }}"
-# #           echo "================================================"
-          
-# #           # Create an action annotation to highlight the potential problems
-# #           npm_high=${{ steps.npm-audit.outputs.npm_high }}
-# #           snyk_high=${{ steps.process-snyk.outputs.snyk_high }}
-          
-# #           if [ "$npm_high" -gt 0 ] || [ "$snyk_high" -gt 0 ]; then
-# #             echo "⚠️ High severity vulnerabilities detected!"
-# #             exit_code=1
-# #           else
-# #             echo "✅ No high severity vulnerabilities detected."
-# #             exit_code=0
-# #           fi
-          
-# #           exit $exit_code
-          
-# #       # Save results files
-# #       - name: Upload results
-# #         if: always()
-# #         uses: actions/upload-artifact@v4
-# #         with:
-# #           name: security-scan-results
-# #           path: |
-# #             snyk-results.json
-# #             npm-audit-results.json
-# name: Enhanced Security Scan
+# name: Security Scan
 # on:
 #   push:
 #     branches: [ "main" ]
@@ -324,7 +10,12 @@
 
 # jobs:
 #   security_scan:
+#     name: Dependency Security Analysis with synk
 #     runs-on: ubuntu-latest
+#     permissions:
+#       contents: read
+#       security-events: write  # For GitHub Security tab integration
+
 #     steps:
 #       - name: Checkout code
 #         uses: actions/checkout@v3
@@ -332,7 +23,7 @@
 #       - name: Set up Node.js
 #         uses: actions/setup-node@v3
 #         with:
-#           node-version: '18'
+#           node-version: '18'  # Use Node.js 18 to avoid compatibility warnings
 #           cache: 'npm'
           
 #       - name: Install dependencies
@@ -378,6 +69,11 @@
           
 #           # Generate JSON results
 #           npm audit --json > npm-audit-results.json || true
+          
+#           # List packages with vulnerabilities
+#           echo "VULNERABLE PACKAGES:"
+#           echo "===================="
+#           grep -o '"name":"[^"]*"' npm-audit-results.json | sort | uniq | cut -d'"' -f4 || echo "None found"
           
 #           # Use the values from the install step
 #           echo "==== NPM VULNERABILITIES SUMMARY ===="
@@ -427,8 +123,9 @@
 #             echo "snyk_total=0" >> $GITHUB_OUTPUT
 #           fi
 
-#       # Create a combined summary
+#       # Create a combined summary and decide on pass/fail
 #       - name: Combine vulnerability results
+#         id: combine-results
 #         if: always()
 #         run: |
 #           # Create a summary in markdown format for the job summary
@@ -465,31 +162,41 @@
 #           echo "  LOW: ${{ steps.process-snyk.outputs.snyk_low }}"
 #           echo "================================================"
           
-#           # Create a failure if high vulnerabilities are found
+#           # Determine if we should fail the job
 #           npm_high=${{ steps.install.outputs.npm_high }}
 #           snyk_high=${{ steps.process-snyk.outputs.snyk_high }}
           
 #           if [ "$npm_high" -gt 0 ] || [ "$snyk_high" -gt 0 ]; then
 #             echo "⚠️ High severity vulnerabilities detected!"
-#             exit_code=1
+#             echo "fail=true" >> $GITHUB_OUTPUT
 #           else
 #             echo "✅ No high severity vulnerabilities detected."
-#             exit_code=0
+#             echo "fail=false" >> $GITHUB_OUTPUT
 #           fi
-          
-#           exit $exit_code
-          
-#       # Add a step to run npm audit fix if requested
-#       - name: Fix vulnerabilities (optional)
-#         if: ${{ github.event_name == 'workflow_dispatch' && steps.install.outputs.npm_total > 0 }}
+
+#       # Fix vulnerabilities automatically when manually triggered
+#       - name: Attempt to fix vulnerabilities
+#         if: ${{ github.event_name == 'workflow_dispatch' && steps.combine-results.outputs.fail == 'true' }}
 #         run: |
 #           echo "Attempting to fix vulnerabilities automatically..."
 #           npm audit fix || true
+          
 #           echo "After npm audit fix:"
 #           npm audit || true
           
+#           echo "Note: Some vulnerabilities may require manual fixes or dependency updates."
+          
+#       # Create issue if high severity vulnerabilities are found (optional)
+#       - name: Create issue for vulnerabilities
+#         if: ${{ steps.combine-results.outputs.fail == 'true' && github.event_name != 'pull_request' }}
+#         run: |
+#           echo "Creating GitHub issue for vulnerabilities..."
+#           # This would use the GitHub CLI or API to create an issue
+#           # gh issue create --title "Security vulnerabilities detected" --body "Found ${{ steps.install.outputs.npm_high }} high severity vulnerabilities in dependencies."
+#           echo "Skipping issue creation in this implementation."
+          
 #       # Save results files
-#       - name: Upload results
+#       - name: Upload scan results
 #         if: always()
 #         uses: actions/upload-artifact@v4
 #         with:
@@ -497,6 +204,13 @@
 #           path: |
 #             snyk-results.json
 #             npm-audit-results.json
+            
+#       # Final step to fail the job if high vulnerabilities found
+#       - name: Check for high severity vulnerabilities
+#         if: ${{ steps.combine-results.outputs.fail == 'true' }}
+#         run: |
+#           echo "⛔ Workflow failed due to high severity vulnerabilities"
+#           exit 1
 name: Security Scan
 on:
   push:
