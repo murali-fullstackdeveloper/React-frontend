@@ -1,4 +1,5 @@
 name: Snyk Security Scan
+
 on:
   push:
     branches: [ "main" ]
@@ -14,7 +15,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-        
+
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
@@ -35,59 +36,31 @@ jobs:
         with:
           args: --all-projects --detection-depth=999 --json-file-output=snyk-results.json
           
-      # Generate HTML report
-      - name: Generate HTML report
-        if: always()
-        continue-on-error: true
-        run: |
-          npm install -g snyk-to-html
-          if [ -f snyk-results.json ]; then
-            snyk-to-html -i snyk-results.json -o snyk-report.html
-          fi
-          
-      # Create simple vulnerability count and summary
+      # Just count and display vulnerabilities in pipeline output
       - name: Count vulnerabilities
         if: always()
         run: |
-          echo "## Snyk Security Scan Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
           if [ -f snyk-results.json ]; then
-            # Install jq for JSON processing
-            sudo apt-get update -qq && sudo apt-get install -y jq
+            echo "FOUND VULNERABILITIES:"
+            echo "======================="
             
-            # Count vulnerabilities by severity
             high_count=$(grep -o '"severity":"high"' snyk-results.json | wc -l)
             medium_count=$(grep -o '"severity":"medium"' snyk-results.json | wc -l)
             low_count=$(grep -o '"severity":"low"' snyk-results.json | wc -l)
             total=$((high_count + medium_count + low_count))
             
-            # Write summary table
-            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
-            echo "| -------- | ----- |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🔴 High     | $high_count |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟠 Medium   | $medium_count |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟡 Low      | $low_count |" >> $GITHUB_STEP_SUMMARY
-            echo "| **TOTAL**   | **$total** |" >> $GITHUB_STEP_SUMMARY
-            
-            # Save counts to a simple text file
-            echo "# VULNERABILITY SUMMARY" > vulnerability-count.txt
-            echo "High: $high_count" >> vulnerability-count.txt
-            echo "Medium: $medium_count" >> vulnerability-count.txt
-            echo "Low: $low_count" >> vulnerability-count.txt
-            echo "Total: $total" >> vulnerability-count.txt
+            echo "HIGH: $high_count"
+            echo "MEDIUM: $medium_count"
+            echo "LOW: $low_count"
+            echo "TOTAL: $total"
           else
-            echo "No Snyk scan results found or scan failed." >> $GITHUB_STEP_SUMMARY
-            echo "No vulnerabilities found or scan failed." > vulnerability-count.txt
+            echo "NO VULNERABILITIES FOUND OR SCAN FAILED"
           fi
           
-      # Upload reports using a specific version reference instead of v3
-      - name: Upload reports
+      # Save raw results file
+      - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: security-reports
-          path: |
-            snyk-results.json
-            snyk-report.html
-            vulnerability-count.txt
+          name: snyk-results
+          path: snyk-results.json
