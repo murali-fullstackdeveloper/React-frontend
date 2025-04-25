@@ -23,32 +23,29 @@ jobs:
       
       - name: Run Semgrep Scan
         run: |
-          semgrep --config=auto --output=semgrep-results.json --json .
+          semgrep ci --verbose
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_TOKEN }}
         continue-on-error: true  # This ensures the workflow doesn't fail when Semgrep finds issues
+      
+      - name: Run Semgrep Local Scan (Fallback)
+        if: ${{ failure() }}
+        run: |
+          semgrep --config=auto --output=semgrep-results.json --json .
+        continue-on-error: true
       
       - name: Display Findings Summary
         if: always()
         run: |
           if [ -f semgrep-results.json ]; then
-            echo "Semgrep findings summary:"
+            echo "Semgrep findings summary from local scan:"
             cat semgrep-results.json | jq '.results | length' | xargs -I{} echo "Total findings: {}"
-            
-            # Optional: Display first few findings
-            cat semgrep-results.json | jq '.results[:5] | .[] | {rule_id, path, line}' || echo "No findings to display"
           else
-            echo "No Semgrep results file found"
+            echo "No local Semgrep results file found"
           fi
       
-      # Removing the upload artifact step since it's causing compatibility issues
-      # Instead, we'll save results to the GitHub job summary
       - name: Save Results to Job Summary
         if: always()
         run: |
-          if [ -f semgrep-results.json ]; then
-            echo "## Semgrep Security Scan Results" >> $GITHUB_STEP_SUMMARY
-            echo "Total findings: $(cat semgrep-results.json | jq '.results | length')" >> $GITHUB_STEP_SUMMARY
-            echo "See the job logs for more details." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "## Semgrep Security Scan Results" >> $GITHUB_STEP_SUMMARY
-            echo "No results file was generated." >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "## Semgrep Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "Scan completed. Check the logs for details on any findings." >> $GITHUB_STEP_SUMMARY
