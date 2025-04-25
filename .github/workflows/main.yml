@@ -6,20 +6,43 @@ on:
     branches: [ main, master ]
   schedule:
     - cron: '0 0 * * 0'  # Run weekly on Sundays
+
 jobs:
   semgrep-scan:
-    name: Semgrep Code Scanning
+    name: Semgrep Security Scan
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-      - name: Semgrep Scan
-        uses: semgrep/semgrep-action@v1
         with:
-          publishToken: ${{ secrets.SEMGREP_TOKEN }}
-        env:
-          # Set your Semgrep token as a secret in GitHub repository
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_TOKEN }}
-          SEMGREP_TIMEOUT: 300
+          fetch-depth: 0  # Fetch all history for all branches and tags
+      
+      - name: Install Semgrep
+        run: pip3 install semgrep
+      
+      - name: Run Semgrep Scan
+        run: |
+          semgrep --config=auto --output=semgrep-results.json --json .
         continue-on-error: true  # This ensures the workflow doesn't fail when Semgrep finds issues
+      
+      - name: Display Findings Summary
+        if: always()
+        run: |
+          if [ -f semgrep-results.json ]; then
+            echo "Semgrep findings summary:"
+            cat semgrep-results.json | jq '.results | length' | xargs -I{} echo "Total findings: {}"
+            
+            # Optional: Display first few findings
+            cat semgrep-results.json | jq '.results[:5] | .[] | {rule_id, path, line}' || echo "No findings to display"
+          else
+            echo "No Semgrep results file found"
+          fi
+      
+      - name: Upload Scan Results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: semgrep-results
+          path: semgrep-results.json
+          retention-days: 7
