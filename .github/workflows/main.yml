@@ -39,10 +39,16 @@ jobs:
             echo "No Semgrep results file found"
           fi
       
-      - name: Upload Scan Results
+      # Removing the upload artifact step since it's causing compatibility issues
+      # Instead, we'll save results to the GitHub job summary
+      - name: Save Results to Job Summary
         if: always()
-        uses: actions/upload-artifact@v2
-        with:
-          name: semgrep-results
-          path: semgrep-results.json
-          retention-days: 7
+        run: |
+          if [ -f semgrep-results.json ]; then
+            echo "## Semgrep Security Scan Results" >> $GITHUB_STEP_SUMMARY
+            echo "Total findings: $(cat semgrep-results.json | jq '.results | length')" >> $GITHUB_STEP_SUMMARY
+            echo "See the job logs for more details." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## Semgrep Security Scan Results" >> $GITHUB_STEP_SUMMARY
+            echo "No results file was generated." >> $GITHUB_STEP_SUMMARY
+          fi
