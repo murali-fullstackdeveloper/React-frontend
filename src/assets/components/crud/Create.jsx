@@ -1,6 +1,7 @@
-import axios from 'axios';
+// //crud/Create.jsx
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { userService } from "@services/api";
 
 const Create = () => {
   const [values, setValues] = useState({ 
@@ -35,7 +36,7 @@ const Create = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
     
     if (!validate()) {
@@ -44,30 +45,29 @@ const Create = () => {
     
     setLoading(true);
     
-    axios.post('http://localhost:5000/userRegistration', values)
-      .then(response => {
-        console.log(response);
-        navigate('/');
-      })
-      .catch(error => {
-        console.log(error);
-        alert("Failed to create user. Please try again.");
-        setLoading(false);
-      });
+    try {
+      await userService.create(values);
+      navigate('/');
+    } catch (error) {
+      console.error(error);
+      alert("Failed to create user. Please try again.");
+      setLoading(false);
+    }
   };
 
   return (
     <div className="d-flex flex-column vh-100 bg-light justify-content-center align-items-center">
       <h4>Add New User</h4>
 
-      <div className="w-50 mt-2 bg-white rounded p-3">
-        <form onSubmit={handleSubmit}>
+      <div className="w-50 mt-2 bg-white rounded p-3 shadow-sm">
+        <form onSubmit={handleSubmit} data-testid="create-form">
           <div className="mb-3">
             <label htmlFor="name" className="form-label">Name</label>
             <input 
               type="text" 
               className={`form-control ${errors.name ? 'is-invalid' : ''}`}
               id="name" 
+              data-testid="input-name"
               value={values.name}
               onChange={e => setValues({ ...values, name: e.target.value })} 
             />
@@ -80,6 +80,7 @@ const Create = () => {
               type="email" 
               className={`form-control ${errors.email ? 'is-invalid' : ''}`}
               id="email" 
+              data-testid="input-email"
               value={values.email}
               onChange={e => setValues({ ...values, email: e.target.value })} 
             />
@@ -92,6 +93,7 @@ const Create = () => {
               type="password" 
               className={`form-control ${errors.password ? 'is-invalid' : ''}`}
               id="password" 
+              data-testid="input-password"
               value={values.password}
               onChange={e => setValues({ ...values, password: e.target.value })} 
             />
@@ -103,6 +105,7 @@ const Create = () => {
               type="submit" 
               className="btn btn-dark" 
               disabled={loading}
+              data-testid="submit-btn"
             >
               {loading ? (
                 <>

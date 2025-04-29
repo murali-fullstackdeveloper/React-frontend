@@ -1,41 +1,39 @@
+// //crud/Home.jsx
 import { useEffect, useState } from "react";
-import axios from "axios";
 import { Link } from "react-router-dom";
+import { userService } from "@services/api";
 
 const Home = () => {
     const [getData, setData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
 
-    const fetchData = () => {
+    const fetchData = async () => {
         setLoading(true);
-        axios.get('http://localhost:5000/')
-            .then(response => {
-                setData(response.data);
-                setLoading(false);
-            })
-            .catch(error => {
-                console.log(error);
-                setError("Failed to fetch data");
-                setLoading(false);
-            });
+        try {
+            const data = await userService.getAll();
+            setData(data);
+            setLoading(false);
+        } catch (error) {
+            console.error(error);
+            setError("Failed to fetch data");
+            setLoading(false);
+        }
     };
 
     useEffect(() => {
         fetchData();
     }, []);
 
-    const handleDelete = (id) => {
+    const handleDelete = async (id) => {
         if (window.confirm("Are you sure you want to delete this user?")) {
-            axios.delete(`http://localhost:5000/delete/${id}`)
-                .then(response => {
-                    console.log(response);
-                    fetchData();
-                })
-                .catch(error => {
-                    console.log(error);
-                    alert("Failed to delete user");
-                });
+            try {
+                await userService.delete(id);
+                fetchData();
+            } catch (error) {
+                console.error(error);
+                alert("Failed to delete user");
+            }
         }
     };
 
@@ -152,6 +150,7 @@ const Home = () => {
                                                                         onClick={() => handleDelete(data._id)} 
                                                                         className="btn btn-outline-danger" 
                                                                         title="Delete User"
+                                                                        data-testid={`delete-btn-${data._id}`}
                                                                     >
                                                                         <i className="bi bi-trash-fill"></i>
                                                                     </button>
